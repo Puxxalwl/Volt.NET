@@ -134,7 +134,8 @@ jobs:
             echo "$output"
             echo "$output" >> push-output.log
             echo "::endgroup::"
-            if grep -qiE "error:|forbidden|conflict" <<<"$output"; then
+            # NOTE: "already exists" 409s are the designed --skip-duplicate skip — not failures
+            if grep -qiE "error:|forbidden|unauthorized" <<<"$output" && ! grep -q "already exists" <<<"$output"; then
               encoded=$(printf '%s' "$output" | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\n/%0A/g')
               echo "::error::push failed for ${pkg##*/}:%0A$encoded"
               exit 1
