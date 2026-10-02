@@ -122,9 +122,18 @@ jobs:
             echo "::error::no .nupkg files found after artifact download"
             exit 1
           fi
-          echo "Pushing ${#packages[@]} packages:"
-          printf '  %s\n' "${packages[@]}"
-          dotnet nuget push "${packages[@]}" \
-            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+          {
+            echo "### NuGet push"
+            echo "Packages: ${#packages[@]}"
+            printf -- '- %s\n' "${packages[@]##*/}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # NOTE: the NuGet/login@v1 temp key is used against the v2 package
+          # endpoint (per the action README), not the v3 index URL.
+          for pkg in "${packages[@]}"; do
+            echo "::group::push ${pkg##*/}"
+            dotnet nuget push "$pkg" \
+              --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+              --source https://www.nuget.org/api/v2/package \
+              --skip-duplicate
+            echo "::endgroup::"
+          done
