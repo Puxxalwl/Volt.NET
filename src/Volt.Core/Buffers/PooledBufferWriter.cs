@@ -65,13 +65,13 @@ public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         return _buffer.AsMemory(_written);
     }
 
-    Span<byte> IBufferWriter<byte>.GetSpan(int sizeHint)
+    public Span<byte> GetSpan(int sizeHint)
     {
         EnsureCapacity(sizeHint);
         return _buffer.AsSpan(_written);
     }
 
-    void IBufferWriter<byte>.Advance(int count)
+    public void Advance(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         _written += count;

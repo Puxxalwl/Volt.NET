@@ -1,16 +1,16 @@
-using System.Buffers;
 using System.Reflection;
-using System.Security.Cryptography;
 
 namespace Volt;
 
-/// <summary>Serves the embedded hydration script (/_volt/hydrate.js) with immutable caching.</summary>
+/// <summary>Loads the embedded hydration script (from Volt.Hydration.JS) into VoltRuntime.</summary>
 internal static class HydrationAssets
 {
-    private static readonly Lazy<(byte[] Bytes, string ETag)> Script = new(LoadScript);
+    private static byte[]? _script;
 
-    private static (byte[], string) LoadScript()
+    /// <summary>Loads hydrate.js from the embedded resource; idempotent.</summary>
+    public static byte[] Load()
     {
+        if (_script is not null) return _script;
         var asm = typeof(Volt.Hydration.HydrationRuntime).Assembly;
         string? name = null;
         foreach (var n in asm.GetManifestResourceNames())
@@ -26,45 +26,13 @@ internal static class HydrationAssets
         using var stream = asm.GetManifestResourceStream(name)!;
         using var ms = new MemoryStream((int)stream.Length);
         stream.CopyTo(ms);
-        var bytes = ms.ToArray();
-        var etag = "\"" + Fnv1a64(bytes).ToString("x16") + "\"";
-        return (bytes, etag);
+        _script = ms.ToArray();
+        return _script;
     }
 
-    public static void Warmup() => _ = Script.Value;
-
-    public static bool TryServe(Microsoft.AspNetCore.Http.HttpContext ctx)
+    /// <summary>Installs the script into VoltRuntime (version + ETag) for engine serving.</summary>
+    public static void Install()
     {
-        var (bytes, etag) = Script.Value;
-        if (ctx.Request.Headers.IfNoneMatch.ToString() == etag)
-        {
-            ctx.Response.StatusCode = 304;
-            return true;
-        }
-        ctx.Response.StatusCode = 200;
-        ctx.Response.ContentType = "text/javascript; charset=utf-8";
-        ctx.Response.Headers.ETag = etag;
-        ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
-        ctx.Response.ContentLength = bytes.Length;
-        ctx.Response.BodyWriter.Write(bytes);
-        return true;
-    }
-
-    /// <summary>Sets the cache-busting version from the script content hash.</summary>
-    public static string ComputeVersion()
-    {
-        var (bytes, _) = Script.Value;
-        return Fnv1a64(bytes).ToString("x8");
-    }
-
-    private static ulong Fnv1a64(ReadOnlySpan<byte> data)
-    {
-        ulong hash = 14695981039346656037;
-        foreach (byte b in data)
-        {
-            hash ^= b;
-            hash *= 1099511628211;
-        }
-        return hash;
+        VoltRuntime.SetHydrateScript(Load());
     }
 }

@@ -11,8 +11,12 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
     <ProjectReference Include="..\..\src\Volt.Kestrel\Volt.Kestrel.csproj" />
+    <ProjectReference Include="..\..\src\Volt.Server\Volt.Server.csproj" />
     <ProjectReference Include="..\..\src\Volt.Compiler\Volt.Compiler.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
   </ItemGroup>
   <Import Project="..\..\src\Volt.Compiler\build\Volt.Compiler.props" />
+  <ItemGroup>
+    <Content Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

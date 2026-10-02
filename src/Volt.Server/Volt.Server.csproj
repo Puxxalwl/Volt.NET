@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>Volt</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Volt.Core\Volt.Core.csproj" />
+    <ProjectReference Include="..\Volt.Hydration.JS\Volt.Hydration.JS.csproj" />
+  </ItemGroup>
+</Project>

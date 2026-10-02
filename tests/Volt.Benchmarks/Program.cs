@@ -73,7 +73,7 @@ public class VoltBenchmarks
 }
 
 /// <summary>A realistic catalog page (~3KB output, constant strings only).</summary>
-internal sealed class CatalogPage : VoltPage
+internal class CatalogPage : VoltPage
 {
     public override void Render(HtmlWriter w, RenderContext ctx)
     {
@@ -121,4 +121,42 @@ internal sealed class CatalogPage : VoltPage
             }
         }
     }
+}
+
+/// <summary>
+/// M2 fast-path benchmark: cached SSG serving through the engine (what the built-in
+/// zero-allocation server does per request, minus socket I/O). Run with --filter "*Fast*".
+/// </summary>
+[MemoryDiagnoser]
+public class FastPathBenchmarks
+{
+    private sealed class SsgCatalogPage : CatalogPage
+    {
+        public override RenderMode Mode => RenderMode.SSG;
+    }
+
+    private static readonly VoltOptions Options = new();
+    private readonly PooledBufferWriter _buffer = new();
+    private readonly VoltHttpContext _response = new();
+    private readonly string _path = WarmCache();
+
+    private static string WarmCache()
+    {
+        var route = "/bench-fast";
+        VoltRuntime.Routes.Add(route, static () => new SsgCatalogPage());
+        var ctx = new VoltHttpContext { Method = "GET", Path = route, Output = new PooledBufferWriter() };
+        VoltEngine.HandleAsync(ctx, Options).GetAwaiter().GetResult();
+        return route;
+    }
+
+    [IterationSetup]
+    public void Setup()
+    {
+        _buffer.Reset();
+        _response.Reset();
+        _response.Output = _buffer;
+    }
+
+    [Benchmark(Description = "fast path: cached SSG serve (route match + cache hit + body write)")]
+    public bool FastPathServe() => VoltEngine.TryServeFast(_path.AsSpan(), default, null, _response, Options);
 }

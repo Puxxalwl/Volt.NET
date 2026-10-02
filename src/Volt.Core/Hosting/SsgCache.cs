@@ -24,6 +24,8 @@ internal sealed class SsgCache
 
     public SsgCache(int capacity) => _capacity = Math.Max(1, capacity);
 
+    public int Capacity => _capacity;
+
     public bool TryGet(string path, out byte[] html, out string etag, out bool fresh, out int revalidateSeconds)
     {
         html = Array.Empty<byte>();

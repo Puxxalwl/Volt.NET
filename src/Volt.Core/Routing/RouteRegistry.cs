@@ -6,13 +6,17 @@ public ref struct RouteMatch
     private readonly Func<VoltPage>? _factory;
     public RouteParams Params;
 
+    /// <summary>The matched route's pattern (shared string reference — no allocation).</summary>
+    public string? Pattern { get; private set; }
+
     public bool Found => _factory is not null;
     public Func<VoltPage> Factory => _factory ?? throw new InvalidOperationException("No route matched.");
 
-    internal RouteMatch(Func<VoltPage> factory, RouteParams parameters)
+    internal RouteMatch(Func<VoltPage> factory, RouteParams parameters, string? pattern = null)
     {
         _factory = factory;
         Params = parameters;
+        Pattern = pattern;
     }
 
     public static RouteMatch None => default;
@@ -83,7 +87,7 @@ public sealed class RouteRegistry
         foreach (var route in routes)
         {
             if (route.TryMatch(path, paramBuffer, out var count))
-                return new RouteMatch(route.Factory, new RouteParams(path, paramBuffer[..count], route.ParamNames));
+                return new RouteMatch(route.Factory, new RouteParams(path, paramBuffer[..count], route.ParamNames), route.Pattern);
         }
         return RouteMatch.None;
     }

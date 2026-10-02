@@ -15,8 +15,8 @@ public static class VoltApp
     {
         options ??= VoltOptions.FromEnvironment();
         VoltRuntime.DevMode = options.DevMode;
-        HydrationAssets.Warmup();
-        VoltRuntime.HydrateVersion = HydrationAssets.ComputeVersion();
+        HydrationAssets.Install();
+        VoltStaticAssets.Load();
 
         if (Environment.GetEnvironmentVariable("VOLT_RUN_MODE") == "export")
         {
@@ -51,8 +51,8 @@ public static class VoltApp
     {
         options ??= new VoltOptions { DevMode = true, BaseUrl = "http://127.0.0.1" };
         VoltRuntime.DevMode = options.DevMode;
-        HydrationAssets.Warmup();
-        VoltRuntime.HydrateVersion = HydrationAssets.ComputeVersion();
+        HydrationAssets.Install();
+        VoltStaticAssets.Load();
 
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {

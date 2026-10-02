@@ -18,5 +18,33 @@ public static class VoltRuntime
     /// <summary>Cache-busting version of the hydration script; set by the transport at startup.</summary>
     public static string HydrateVersion { get; set; } = "1";
 
+    /// <summary>
+    /// The hydrate.js bytes (set by the host from the embedded resource at startup).
+    /// The engine serves it from here with immutable caching.
+    /// </summary>
+    public static byte[]? HydrateScript { get; private set; }
+
+    /// <summary>ETag for the hydrate script (quoted FNV-1a of the bytes).</summary>
+    public static string? HydrateScriptETag { get; private set; }
+
+    /// <summary>Installs the hydration script and computes its version/ETag. Call once at host startup.</summary>
+    public static void SetHydrateScript(byte[] script)
+    {
+        HydrateScript = script;
+        HydrateVersion = Fnv1a64(script).ToString("x8");
+        HydrateScriptETag = "\"" + Fnv1a64(script).ToString("x16") + "\"";
+    }
+
+    private static ulong Fnv1a64(ReadOnlySpan<byte> data)
+    {
+        ulong hash = 14695981039346656037;
+        foreach (byte b in data)
+        {
+            hash ^= b;
+            hash *= 1099511628211;
+        }
+        return hash;
+    }
+
     internal static string HydrateScriptSrc => "/_volt/hydrate.js?v=" + HydrateVersion;
 }

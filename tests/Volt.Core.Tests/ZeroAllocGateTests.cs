@@ -11,9 +11,11 @@ namespace Volt.Core.Tests;
 public class ZeroAllocGateTests
 {
     /// <summary>A realistic page: ~40 elements, nav, list, footer — all constant strings.</summary>
-    private sealed class CatalogPage : VoltPage
+    private class CatalogPage : VoltPage
     {
-        public override void Render(HtmlWriter w, RenderContext ctx)
+        public override void Render(HtmlWriter w, RenderContext ctx) => RenderCatalog(w, ctx);
+
+        public static void RenderCatalog(HtmlWriter w, RenderContext ctx)
         {
             w.DocType();
             using (w.Html("en"))
@@ -151,5 +153,67 @@ public class ZeroAllocGateTests
         Assert.StartsWith("<!DOCTYPE html>", html);
         Assert.EndsWith("</html>", html);
         Assert.Equal(9, html.Split("<article").Length); // 8 articles + prefix
+    }
+
+    /// <summary>SSG page served through the zero-allocation fast path (M2 server hot path).</summary>
+    private sealed class SsgCatalogPage : CatalogPage
+    {
+        public override RenderMode Mode => RenderMode.SSG;
+        public override void Render(HtmlWriter w, RenderContext ctx) => RenderCatalog(w, ctx);
+    }
+
+    private static readonly string FastRoute = "/__zero_fast_" + Guid.NewGuid().ToString("N")[..8];
+
+    private static async Task WarmFastPathAsync()
+    {
+        var route = FastRoute;
+        VoltRuntime.Routes.Add(route, static () => new SsgCatalogPage());
+        var ctx = new VoltHttpContext
+        {
+            Method = "GET",
+            Path = route,
+            Output = new PooledBufferWriter(),
+        };
+        await VoltEngine.HandleAsync(ctx, new VoltOptions());
+    }
+
+    private static readonly VoltOptions GateOptions = new();
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool ServeFastOnce(ReadOnlySpan<char> path, VoltHttpContext response)
+        => VoltEngine.TryServeFast(path, default, null, response, GateOptions);
+
+    [Fact]
+    public async Task FastPathSsgServeIsZeroAlloc()
+    {
+        // populate the SSG cache via the async pipeline once (allocations allowed here)
+        await WarmFastPathAsync();
+
+        using var buffer = new PooledBufferWriter();
+        var response = new VoltHttpContext { Output = buffer };
+        var path = FastRoute.AsSpan();
+
+        // warm-up: JIT + pools
+        for (int i = 0; i < 20; i++)
+        {
+            buffer.Reset();
+            response.Reset();
+            response.Output = buffer;
+            Assert.True(ServeFastOnce(path, response));
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        const int iterations = 500;
+        for (int i = 0; i < iterations; i++)
+        {
+            buffer.Reset();
+            response.Reset();
+            response.Output = buffer;
+            Assert.True(ServeFastOnce(path, response));
+        }
+        var delta = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(delta == 0,
+            $"fast-path SSG serving allocated {delta} bytes over {iterations} iterations (expected 0)");
     }
 }
