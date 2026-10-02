@@ -258,7 +258,7 @@ public static class VoltEngine
         var page = route.Factory();
         var request = BuildRequest(ctx, options, path, route);
 
-        if (page.Mode == RenderMode.SSG && token is null)
+        if (page.Mode == RenderMode.SSG && token is null && !options.DevMode)
         {
             var ssg = await HandleSsgAsync(ctx, page, request, path, options);
             if (ssg) return;
@@ -266,7 +266,8 @@ public static class VoltEngine
         else
         {
             await page.OnPreRenderAsync(request);
-            RenderToResponse(ctx, page, request, path, token);
+            RenderToResponse(ctx, page, request, path, token,
+                devScript: options.DevMode && (method == "GET" || method == "HEAD"));
         }
 
         Flush(ctx);
@@ -476,7 +477,7 @@ public static class VoltEngine
     // Rendering (sync, zero-alloc hot path)
     // ------------------------------------------------------------------
 
-    private static void RenderToResponse(VoltHttpContext ctx, VoltPage page, VoltRequest request, string path, string? token)
+    private static void RenderToResponse(VoltHttpContext ctx, VoltPage page, VoltRequest request, string path, string? token, bool devScript = false)
     {
         ctx.StatusCode = 200;
         ctx.ContentType = "text/html; charset=utf-8";
@@ -489,7 +490,30 @@ public static class VoltEngine
         {
             w.Return();
         }
+        if (devScript)
+            ctx.Output.Write(s_devScript); // M6: live-reload poller (dev only, GET only)
         ctx.HasBody = true;
+    }
+
+    /// <summary>Live-reload poll script bytes (dev only — never in production output).</summary>
+    private static readonly byte[] s_devScript = Encoding.UTF8.GetBytes(VoltLiveReload.PollScript);
+
+    /// <summary>M6: /_volt/ping — the live-reload poll target; returns the current change stamp.</summary>
+    private static void ServeLiveReloadPing(VoltHttpContext ctx)
+    {
+        VoltLiveReload.Start(VoltStaticAssets.Root ?? Directory.GetCurrentDirectory());
+        ctx.StatusCode = 200;
+        ctx.ContentType = "text/plain; charset=utf-8";
+        ctx.CacheControl = "no-store";
+        var w = ctx.Output;
+        if (w is not null)
+        {
+            var writer = HtmlWriter.Rent(w);
+            try { writer.Text(VoltLiveReload.Stamp.ToString()); }
+            finally { writer.Return(); }
+        }
+        ctx.HasBody = true;
+        ctx.ResponseStarted = true;
     }
 
     private static byte[] RenderToBytes(VoltPage page, VoltRequest request, string path, string? token)
@@ -627,6 +651,10 @@ public static class VoltEngine
         {
             case "/_volt/hydrate.js":
                 ServeHydrateScript(ctx);
+                return;
+
+            case "/_volt/ping" when options.DevMode:
+                ServeLiveReloadPing(ctx);
                 return;
 
             case "/_volt/action" when method == "POST":

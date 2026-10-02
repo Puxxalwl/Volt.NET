@@ -14,6 +14,7 @@ public static class VoltServerApp
     public static int Run(string[] args, VoltOptions? options = null)
     {
         options ??= new VoltOptions();
+        if (Environment.GetEnvironmentVariable("VOLT_DEV") == "1") options.DevMode = true;
         VoltRuntime.DevMode = options.DevMode;
         LoadHydrateScript(typeof(Volt.Hydration.HydrationRuntime).Assembly);
         VoltStaticAssets.Load();

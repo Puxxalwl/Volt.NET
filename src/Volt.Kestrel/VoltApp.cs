@@ -14,6 +14,8 @@ public static class VoltApp
     public static int Run(string[]? args = null, VoltOptions? options = null)
     {
         options ??= VoltOptions.FromEnvironment();
+        // `volt dev` (dotnet watch) sets VOLT_DEV=1 → DevMode: fresh renders + live reload
+        if (Environment.GetEnvironmentVariable("VOLT_DEV") == "1") options.DevMode = true;
         VoltRuntime.DevMode = options.DevMode;
         HydrationAssets.Install();
         VoltStaticAssets.Load();

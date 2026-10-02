@@ -213,14 +213,23 @@ public sealed class VoltAppTests : IAsyncLifetime
     [Fact]
     public async Task SsgPageServesEtagAnd304()
     {
-        var first = await _client.GetAsync("/");
-        var etag = first.Headers.ETag?.Tag;
-        Assert.NotNull(etag);
+        // the SSG cache (and its ETag) is a production feature — DevMode renders
+        // every request fresh, so this test runs its own server with DevMode off
+        var (url, app) = await VoltApp.StartTestServerAsync(new VoltOptions { BaseUrl = "http://127.0.0.1" });
+        try
+        {
+            using var client = new HttpClient();
+            var first = await client.GetAsync(url + "/");
+            var etag = first.Headers.ETag?.Tag;
+            Assert.NotNull(etag);
+            Assert.DoesNotContain("/_volt/ping", await first.Content.ReadAsStringAsync()); // prod: no dev script
 
-        var request = new HttpRequestMessage(HttpMethod.Get, "/");
-        request.Headers.IfNoneMatch.ParseAdd(etag!);
-        var second = await _client.SendAsync(request);
-        Assert.Equal(HttpStatusCode.NotModified, second.StatusCode);
+            var request = new HttpRequestMessage(HttpMethod.Get, url + "/");
+            request.Headers.IfNoneMatch.ParseAdd(etag!);
+            var second = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.NotModified, second.StatusCode);
+        }
+        finally { await app.DisposeAsync(); }
     }
 
     // ------------------------------------------------------------------
@@ -393,7 +402,10 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("<li>Item 3 of 3</li>", html);
         Assert.Contains("<p id=\"path-echo\">path: /templated</p>", html);
         Assert.Contains("@literal", html);
-        Assert.EndsWith("</html>", html);
+        Assert.Contains("</html>", html);
+        // DevMode appends the live-reload poll script after </html> (valid: it
+        // parses as trailing body content, and prod output never contains it)
+        Assert.EndsWith("1000)})()</script>", html);
     }
 
     [Fact]
