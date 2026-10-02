@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <!-- M6: demo ships minified HTML and golden-tested pages -->
+    <VoltMinify>true</VoltMinify>
+    <RootNamespace>Volt.Demo</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Volt.Kestrel\Volt.Kestrel.csproj" />
+    <ProjectReference Include="..\..\src\Volt.Server\Volt.Server.csproj" />
+    <ProjectReference Include="..\..\src\Volt.Compiler\Volt.Compiler.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+  <Import Project="..\..\src\Volt.Compiler\build\Volt.Compiler.props" />
+</Project>

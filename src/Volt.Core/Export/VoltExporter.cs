@@ -23,14 +23,14 @@ public static class VoltExporter
 
             if (route.ParamCount == 0)
             {
-                count += RenderRoute(route, page, route.Pattern, outDir);
+                count += RenderRoute(route, page, route.Pattern, outDir, options);
             }
             else
             {
                 foreach (var value in page.StaticPaths())
                 {
                     var path = route.MakePath(value);
-                    count += RenderRoute(route, route.Factory(), path, outDir);
+                    count += RenderRoute(route, route.Factory(), path, outDir, options);
                 }
             }
         }
@@ -39,24 +39,36 @@ public static class VoltExporter
         File.WriteAllBytes(Path.Combine(outDir, "sitemap.xml"), Sitemap.BuildXml(VoltRuntime.Routes, (options.BaseUrl ?? "http://localhost").TrimEnd('/')));
         File.WriteAllBytes(Path.Combine(outDir, "robots.txt"), Sitemap.BuildRobots(options.BaseUrl ?? "http://localhost"));
 
-        // copy wwwroot if present (relative to the current directory)
-        if (Directory.Exists("wwwroot"))
+        // copy wwwroot if present: CWD first (`volt export` from the project dir),
+        // then next to the binary (dotnet run --project / publish output)
+        foreach (var root in new[] { "wwwroot", Path.Combine(AppContext.BaseDirectory, "wwwroot") })
         {
-            foreach (var file in Directory.EnumerateFiles("wwwroot", "*", SearchOption.AllDirectories))
+            if (!Directory.Exists(root)) continue;
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                var rel = Path.GetRelativePath("wwwroot", file);
+                var rel = Path.GetRelativePath(root, file);
                 var dest = Path.Combine(outDir, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 File.Copy(file, dest, overwrite: true);
             }
             log.WriteLine($"volt export: wwwroot copied");
+            break;
+        }
+
+        // M6: islands reference /_volt/hydrate.<hash>.js — a static export must ship it
+        if (VoltRuntime.HydrateScript is { Length: > 0 } hydrate)
+        {
+            var voltDir = Path.Combine(outDir, "_volt");
+            Directory.CreateDirectory(voltDir);
+            File.WriteAllBytes(Path.Combine(voltDir, $"hydrate.{VoltRuntime.HydrateVersion}.js"), hydrate);
+            log.WriteLine("volt export: hydrate script written");
         }
 
         log.WriteLine($"volt export: {count} pages -> {Path.GetFullPath(outDir)}");
         return count;
     }
 
-    private static int RenderRoute(RoutePattern route, VoltPage page, string path, string outDir)
+    private static int RenderRoute(RoutePattern route, VoltPage page, string path, string outDir, VoltOptions options)
     {
         var request = new VoltRequest
         {
@@ -76,6 +88,13 @@ public static class VoltExporter
 
         page.Render(w, ctx);
         w.Return();
+
+        // M6: apply runtime minification the same way the server would
+        if (options.MinifyHtml ?? VoltRuntime.HtmlMinifyDefault)
+        {
+            var span = buffer.WrittenSpanMutable;
+            buffer.Truncate(VoltHtmlMinifier.Minify(span, span));
+        }
 
         var file = path == "/"
             ? Path.Combine(outDir, "index.html")

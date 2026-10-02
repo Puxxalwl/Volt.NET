@@ -8,6 +8,7 @@
   <Project Path="src/Volt.Testing/Volt.Testing.csproj" />
   <Project Path="examples/starter/Starter.csproj" />
   <Project Path="apps/docs/Docs.csproj" />
+  <Project Path="apps/demo/Demo.csproj" />
   <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
   <Project Path="tests/Volt.Compiler.Tests/Volt.Compiler.Tests.csproj" />
   <Project Path="tests/Volt.E2E/Volt.E2E.csproj" />

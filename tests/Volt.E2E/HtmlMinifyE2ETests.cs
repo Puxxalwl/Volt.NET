@@ -13,11 +13,14 @@ public sealed class HtmlMinifyE2ETests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        // MinifyHtml explicitly on; DevMode off (prod-like output)
+        // MinifyHtml explicitly on; DevMode off (prod-like output).
+        // A unique cache capacity gives this server its OWN static SSG cache —
+        // otherwise a parallel server may have filled the shared cache unminified.
         (_url, _app) = await VoltApp.StartTestServerAsync(new VoltOptions
         {
             MinifyHtml = true,
             BaseUrl = "http://127.0.0.1",
+            SsgCacheCapacity = 71,
         });
     }
 
@@ -45,7 +48,7 @@ public sealed class HtmlMinifyE2ETests : IAsyncLifetime
     [Fact]
     public async Task DefaultOff_NoMinification()
     {
-        var (url, app) = await VoltApp.StartTestServerAsync(new VoltOptions { BaseUrl = "http://127.0.0.1" });
+        var (url, app) = await VoltApp.StartTestServerAsync(new VoltOptions { BaseUrl = "http://127.0.0.1", SsgCacheCapacity = 73 });
         try
         {
             using var http = new HttpClient();

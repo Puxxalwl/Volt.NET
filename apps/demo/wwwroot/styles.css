@@ -1,0 +1,33 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  max-width: 880px;
+  margin-inline: auto;
+  padding: 0 1.2rem 3rem;
+}
+header { border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); margin-bottom: 2rem; }
+nav { display: flex; gap: 1.1rem; align-items: baseline; padding: 1rem 0; flex-wrap: wrap; }
+.brand { font-weight: 800; text-decoration: none; font-size: 1.15rem; }
+a { color: #c2410c; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 2rem; letter-spacing: -0.02em; }
+.hero { text-align: center; padding: 3rem 0 2rem; }
+.hero h1 { font-size: 2.6rem; }
+.lead { font-size: 1.15rem; opacity: 0.85; }
+.cta {
+  display: inline-block; background: #c2410c; color: #fff !important;
+  padding: 0.6rem 1.2rem; border-radius: 999px; text-decoration: none; font-weight: 600;
+}
+section { display: grid; gap: 1rem; }
+.feature, .card {
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 12px; padding: 1rem 1.2rem;
+}
+.feature h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.feature p, .card p { margin: 0; opacity: 0.85; }
+.counter { display: flex; gap: 0.8rem; align-items: center; }
+.counter button { font: inherit; padding: 0.3rem 0.9rem; border-radius: 8px; border: 1px solid currentColor; background: transparent; cursor: pointer; }
+footer { margin-top: 3rem; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); padding-top: 1rem; opacity: 0.7; font-size: 0.9rem; }
+pre { overflow: auto; }

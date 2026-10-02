@@ -147,3 +147,35 @@ jobs:
             cat push-output.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # M6.9: the demo site (apps/demo) — static export via `volt export`, served by GitHub Pages
+  deploy-demo:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: daily
+      - name: Export static site
+        run: |
+          cd apps/demo
+          VOLT_RUN_MODE=export VOLT_EXPORT_DIR=../../dist DOTNET_ROLL_FORWARD=Major dotnet run -c Release
+          echo "--- exported files ---"
+          find ../../dist -type f | sort
+      - name: Ensure .nojekyll (underscore dirs like _volt/ must be served as-is)
+        run: touch dist/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
