@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -14,6 +15,10 @@ public static class VoltEngine
 {
     public static async Task HandleAsync(VoltHttpContext ctx, VoltOptions options)
     {
+        var metricsStart = Stopwatch.GetTimestamp();
+        var metricsEnabled = options.EnableMetrics;
+        if (metricsEnabled) VoltMetrics.Enabled = true;
+        if (metricsEnabled) VoltMetrics.RecordRequest();
         try
         {
             if (options.HasMiddleware)
@@ -44,6 +49,15 @@ public static class VoltEngine
             }
             try { await RenderErrorAsync(ctx, ex, options); }
             catch { ctx.StatusCode = 500; ctx.ResponseStarted = true; }
+        }
+        finally
+        {
+            if (metricsEnabled)
+            {
+                VoltMetrics.RecordStatus(ctx.StatusCode);
+                VoltMetrics.RecordBytes(ctx.Output is PooledBufferWriter pooled ? pooled.WrittenCount : 0);
+                VoltMetrics.RecordDuration(metricsStart);
+            }
         }
     }
 
@@ -81,6 +95,8 @@ public static class VoltEngine
         // static assets (wwwroot): linear scan over the frozen set — zero alloc
         if (VoltStaticAssets.TryGet(path, out var assetBytes, out var assetEtag, out var assetType))
         {
+            if (options.EnableMetrics) VoltMetrics.RecordFastPath();
+
             if (IfNoneMatchMatches(headers, assetEtag))
             {
                 response.StatusCode = 304;
@@ -395,6 +411,7 @@ public static class VoltEngine
 
         if (cache.TryGet(path, out var html, out var etag, out var fresh, out var revalidate))
         {
+            if (options.EnableMetrics) VoltMetrics.RecordSsgHit();
             if (IfNoneMatchMatches(ctx, etag))
             {
                 ctx.StatusCode = 304;
@@ -519,6 +536,55 @@ public static class VoltEngine
 
     /// <summary>Live-reload poll script bytes (dev only — never in production output).</summary>
     private static readonly byte[] s_devScript = Encoding.UTF8.GetBytes(VoltLiveReload.PollScript);
+
+    /// <summary>M6: /_volt/metrics — Prometheus text exposition format.</summary>
+    private static void ServeMetrics(VoltHttpContext ctx)
+    {
+        ctx.StatusCode = 200;
+        ctx.ContentType = "text/plain; charset=utf-8";
+        var w = ctx.Output;
+        if (w is not null)
+        {
+            var writer = HtmlWriter.Rent(w);
+            try { writer.Text(VoltMetrics.Render()); }
+            finally { writer.Return(); }
+        }
+        ctx.HasBody = true;
+        ctx.ResponseStarted = true;
+    }
+
+    /// <summary>M6: /_volt/hud — a tiny self-refreshing metrics page (no build, no JS deps).</summary>
+    private static void ServeHud(VoltHttpContext ctx)
+    {
+        ctx.StatusCode = 200;
+        ctx.ContentType = "text/html; charset=utf-8";
+        var w = ctx.Output;
+        if (w is not null)
+        {
+            var writer = HtmlWriter.Rent(w);
+            try
+            {
+                writer.DocType();
+                using (writer.El("html"))
+                {
+                    using (writer.El("head"))
+                    {
+                        using (writer.El("title")) writer.Text("volt hud");
+                        // auto-refresh every 2s — the HUD stays live without a single line of JS
+                        using (writer.VoidEl("meta")) { writer.Attr("http-equiv", "refresh"); writer.Attr("content", "2"); }
+                    }
+                    using (writer.El("body"))
+                    {
+                        using (writer.El("h1")) writer.Text("volt metrics");
+                        using (writer.El("pre")) writer.Text(VoltMetrics.Render());
+                    }
+                }
+            }
+            finally { writer.Return(); }
+        }
+        ctx.HasBody = true;
+        ctx.ResponseStarted = true;
+    }
 
     /// <summary>M6: /_volt/ping — the live-reload poll target; returns the current change stamp.</summary>
     private static void ServeLiveReloadPing(VoltHttpContext ctx)
@@ -674,6 +740,14 @@ public static class VoltEngine
 
             case "/_volt/ping" when options.DevMode:
                 ServeLiveReloadPing(ctx);
+                return;
+
+            case "/_volt/metrics" when options.EnableMetrics:
+                ServeMetrics(ctx);
+                return;
+
+            case "/_volt/hud" when options.EnableMetrics:
+                ServeHud(ctx);
                 return;
 
             case "/_volt/action" when method == "POST":

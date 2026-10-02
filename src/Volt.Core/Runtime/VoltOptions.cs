@@ -16,6 +16,12 @@ public sealed class VoltOptions
     public bool DevMode { get; set; }
 
     /// <summary>
+    /// M6: request metrics — lock-free counters + µs histogram, served as Prometheus
+    /// text at /_volt/metrics and as a live page at /_volt/hud. Off by default.
+    /// </summary>
+    public bool EnableMetrics { get; set; }
+
+    /// <summary>
     /// M6: HTML minification (whitespace runs → single space, pre/script/style/textarea preserved).
     /// null = follow the compile-time default (project &lt;VoltMinify&gt; → true).
     /// </summary>
