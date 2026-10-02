@@ -15,6 +15,12 @@ public sealed class VoltOptions
     /// <summary>Show stack traces on error pages (default: development only).</summary>
     public bool DevMode { get; set; }
 
+    /// <summary>
+    /// M6: HTML minification (whitespace runs → single space, pre/script/style/textarea preserved).
+    /// null = follow the compile-time default (project &lt;VoltMinify&gt; → true).
+    /// </summary>
+    public bool? MinifyHtml { get; set; }
+
     /// <summary>Output directory for `volt export` (default: dist).</summary>
     public string ExportPath { get; set; } = "dist";
 

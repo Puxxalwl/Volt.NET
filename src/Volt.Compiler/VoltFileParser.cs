@@ -49,7 +49,7 @@ internal static class VoltFileParser
     }
 
     public static VoltFileModel Parse(string filePath, string text,
-        IReadOnlyDictionary<string, PartialSignature> partials)
+        IReadOnlyDictionary<string, PartialSignature> partials, bool minify = false)
     {
         var model = new VoltFileModel { FilePath = filePath, ClassName = SafeName(filePath) };
         model.IsLayout = IsLayoutFile(filePath);
@@ -74,7 +74,7 @@ internal static class VoltFileParser
                 throw new FormatException(
                     "files starting with '_' are non-routable: use _Layout.volt/_NameLayout.volt or declare @partial");
 
-            var parser = new BodyParser(body, model.IsLayout, model.IsPartial, partials);
+            var parser = new BodyParser(body, model.IsLayout, model.IsPartial, partials, minify);
             var code = parser.Parse();
             if (model.IsLayout)
             {
@@ -213,14 +213,20 @@ internal static class VoltFileParser
         /// <summary>For layouts: code length in front of @renderbody; -1 when absent.</summary>
         public int RenderBodyMark = -1;
 
-        public BodyParser(string text, bool isLayout, bool isPartial,
-            IReadOnlyDictionary<string, PartialSignature> partials)
+        public BodyParser(string text, bool isLayout, bool isPartial, IReadOnlyDictionary<string, PartialSignature> partials, bool minify = false)
         {
             _t = text;
             _isLayout = isLayout;
             _isPartial = isPartial;
             _partials = partials;
+            _minify = minify;
         }
+
+        /// <summary>true → collapse whitespace runs in static text literals (compile-time minification).</summary>
+        private readonly bool _minify;
+
+        /// <summary>Open pre/script/style/textarea elements — their content is copied verbatim.</summary>
+        private readonly List<string> _preserve = new();
 
         /// <summary>Top-level: markup with @-transitions.</summary>
         public string Parse()
@@ -381,6 +387,7 @@ internal static class VoltFileParser
                 _i = end + 1;
                 if (name == "volt-island")
                     return 0; // self-contained node: the close tag emits nothing
+                PreserveClosed(name.ToLowerInvariant());
                 _sb.AppendLine($"            }} // /{name}");
                 return -1;
             }
@@ -478,6 +485,9 @@ internal static class VoltFileParser
 
             // normal element: the using scope wraps all nested content;
             // the matching </tag> emits the closing brace
+            var lowerName = tagName.ToLowerInvariant();
+            if (lowerName is "pre" or "script" or "style" or "textarea")
+                _preserve.Add(lowerName); // M6: minification never touches this content
             _sb.AppendLine($"            using (w.El(\"{tagName}\"))");
             _sb.AppendLine("            {");
             foreach (var (name, value, isExprValue) in attrs)
@@ -693,7 +703,45 @@ internal static class VoltFileParser
         // ------------------------------------------------------------------
 
         private void EmitText(string text)
-            => _sb.AppendLine($"            w.Text(\"{EscapeCsString(text)}\");");
+        {
+            if (_minify && _preserve.Count == 0 && HasWhitespaceRun(text))
+                text = CollapseWhitespace(text);
+            _sb.AppendLine($"            w.Text(\"{EscapeCsString(text)}\");");
+        }
+
+        private static bool HasWhitespaceRun(string text)
+        {
+            for (int i = 0; i + 1 < text.Length; i++)
+                if (char.IsWhiteSpace(text[i]) && char.IsWhiteSpace(text[i + 1])) return true;
+            return false;
+        }
+
+        /// <summary>M6 compile-time minification: runs of whitespace → single space (leading/trailing kept — inline spacing is preserved).</summary>
+        private static string CollapseWhitespace(string text)
+        {
+            var sb = new System.Text.StringBuilder(text.Length);
+            bool inRun = false;
+            foreach (var c in text)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    if (!inRun) { sb.Append(' '); inRun = true; }
+                }
+                else
+                {
+                    sb.Append(c);
+                    inRun = false;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private void PreserveClosed(string lowerName)
+        {
+            for (int i = _preserve.Count - 1; i >= 0; i--)
+                if (_preserve[i] == lowerName) { _preserve.RemoveAt(i); return; }
+        }
+
 
         private void EmitAttr(string name, string value, bool isExpr)
         {

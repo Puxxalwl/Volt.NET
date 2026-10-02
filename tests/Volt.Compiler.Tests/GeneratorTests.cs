@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Volt.Compiler;
 using Xunit;
 
@@ -212,5 +213,98 @@ public sealed class FormGenerationTests
         var generated = RunGeneratorWithSources(("/app/Form.cs", FormSource.Replace("partial ", "")));
 
         Assert.Contains("must be declared partial", generated);
+    }
+}
+
+// ---- M6: compile-time HTML minification (<VoltMinify>) ----------------------------
+
+public sealed class VoltMinifyTests
+{
+    /// <summary>Runs the generator with an analyzer option set (build_property.VoltMinify).</summary>
+    private static string RunGenerator(bool minify, params (string Path, string Text)[] files)
+    {
+        var additionalTexts = files.Select(f => (AdditionalText)new InMemoryAdditionalText(f.Path, f.Text)).ToArray();
+        var compilation = CSharpCompilation.Create("TestApp",
+            syntaxTrees: [CSharpSyntaxTree.ParseText("class Empty {}", new CSharpParseOptions(LanguageVersion.Latest))]);
+
+        var options = new Dictionary<string, string>
+        {
+            ["build_property.MSBuildProjectDirectory"] = "/app",
+            ["build_property.VoltMinify"] = minify ? "true" : "false",
+        };
+        var provider = new TestAnalyzerConfigOptions(options);
+
+        var driver = CSharpGeneratorDriver.Create(
+            [new VoltGenerator().AsSourceGenerator()],
+            additionalTexts: additionalTexts,
+            optionsProvider: provider);
+        var result = driver.RunGenerators(compilation).GetRunResult();
+
+        var sb = new StringBuilder();
+        foreach (var tree in result.GeneratedTrees)
+        {
+            sb.AppendLine($"// ===== {tree.FilePath}");
+            sb.AppendLine(tree.GetText().ToString());
+        }
+        return sb.ToString();
+    }
+
+    private const string IndentedVolt = """
+        @page /indent
+        @mode SSR
+
+        <div>
+          <p>Hello   world
+        </p>
+        </div>
+        <pre>keep  this
+        verbatim</pre>
+        """;
+
+    [Fact]
+    public void MinifyOn_CollapsesStaticTextLiterals()
+    {
+        var generated = RunGenerator(true, ("/app/Pages/indent.volt", IndentedVolt));
+
+        // the multi-word text literal collapsed to a single space
+        Assert.Contains("w.Text(\"Hello world \")", generated);
+        // runtime default set by the generated init
+        Assert.Contains("VoltRuntime.HtmlMinifyDefault = true", generated);
+    }
+
+    [Fact]
+    public void MinifyOn_PreservesPreContent()
+    {
+        var generated = RunGenerator(true, ("/app/Pages/indent.volt", IndentedVolt));
+        Assert.Contains("keep  this", generated); // pre content verbatim
+    }
+
+    [Fact]
+    public void MinifyOff_KeepsTextVerbatim()
+    {
+        var generated = RunGenerator(false, ("/app/Pages/indent.volt", IndentedVolt));
+
+        Assert.Contains("Hello   world", generated);
+        Assert.DoesNotContain("HtmlMinifyDefault = true", generated);
+    }
+
+    private sealed class InMemoryAdditionalText(string path, string content) : AdditionalText
+    {
+        public override string Path { get; } = path;
+        public override SourceText? GetText(CancellationToken cancellationToken) => SourceText.From(content, Encoding.UTF8);
+    }
+
+    private sealed class TestAnalyzerConfigOptions(Dictionary<string, string> values) : AnalyzerConfigOptionsProvider
+    {
+        public override AnalyzerConfigOptions GlobalOptions { get; } = new TestOptions(values);
+
+        public override AnalyzerConfigOptions GetOptions(AdditionalText file) => new TestOptions(new());
+        public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => new TestOptions(new());
+
+        private sealed class TestOptions(Dictionary<string, string> values) : AnalyzerConfigOptions
+        {
+            public override bool TryGetValue(string key, out string? value)
+                => values.TryGetValue(key, out value);
+        }
     }
 }

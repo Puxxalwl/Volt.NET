@@ -230,7 +230,7 @@ public static class VoltEngine
                 return;
             }
             await postPage.OnPreRenderAsync(postRequest);
-            RenderToResponse(ctx, postPage, postRequest, path, token: null); // POST responses are never cached
+            RenderToResponse(ctx, postPage, postRequest, path, token: null, devScript: false, options); // POST responses are never cached
             Flush(ctx);
             return;
         }
@@ -267,7 +267,7 @@ public static class VoltEngine
         {
             await page.OnPreRenderAsync(request);
             RenderToResponse(ctx, page, request, path, token,
-                devScript: options.DevMode && (method == "GET" || method == "HEAD"));
+                devScript: options.DevMode && (method == "GET" || method == "HEAD"), options);
         }
 
         Flush(ctx);
@@ -415,7 +415,7 @@ public static class VoltEngine
                     try
                     {
                         var freshPage = ResolveRoute(path)?.Factory() ?? page;
-                        var bytes = RenderToBytes(freshPage, BuildMinimalRequest(path), path, token: null);
+                        var bytes = RenderToBytes(freshPage, BuildMinimalRequest(path), path, token: null, minify: MinifyEnabled(options));
                         cache.EndRefresh(path, bytes, SsgCache.ComputeETag(bytes), revalidateSeconds);
                     }
                     catch
@@ -429,7 +429,7 @@ public static class VoltEngine
 
         // miss: render inline and cache
         await page.OnPreRenderAsync(request);
-        html = RenderToBytes(page, request, path, token: null);
+        html = RenderToBytes(page, request, path, token: null, minify: MinifyEnabled(options));
         etag = SsgCache.ComputeETag(html);
         cache.Store(path, html, etag, page.RevalidateSeconds);
 
@@ -477,11 +477,34 @@ public static class VoltEngine
     // Rendering (sync, zero-alloc hot path)
     // ------------------------------------------------------------------
 
-    private static void RenderToResponse(VoltHttpContext ctx, VoltPage page, VoltRequest request, string path, string? token, bool devScript = false)
+    private static void RenderToResponse(VoltHttpContext ctx, VoltPage page, VoltRequest request, string path, string? token, bool devScript, VoltOptions options)
     {
         ctx.StatusCode = 200;
         ctx.ContentType = "text/html; charset=utf-8";
-        var w = HtmlWriter.Rent(ctx.Output ?? throw new InvalidOperationException("Volt: no output writer"));
+        var output = ctx.Output ?? throw new InvalidOperationException("Volt: no output writer");
+
+        if (MinifyEnabled(options))
+        {
+            // M6: render into pooled scratch, minify in place, copy out — works for
+            // every transport (the writer behind ctx.Output may be a PipeWriter)
+            using var scratch = new PooledBufferWriter();
+            RenderInto(scratch, page, request, path, token);
+            if (devScript) scratch.Write(s_devScript); // M6: live-reload poller (dev only, GET only)
+            var span = scratch.WrittenSpanMutable;
+            scratch.Truncate(VoltHtmlMinifier.Minify(span, span)); // forward-compacting, o ≤ i — safe
+            output.Write(scratch.WrittenSpan);
+            ctx.HasBody = true;
+            return;
+        }
+
+        RenderInto(output, page, request, path, token);
+        if (devScript) output.Write(s_devScript);
+        ctx.HasBody = true;
+    }
+
+    private static void RenderInto(System.Buffers.IBufferWriter<byte> output, VoltPage page, VoltRequest request, string path, string? token)
+    {
+        var w = HtmlWriter.Rent(output);
         try
         {
             RenderPage(page, request, path, token, w);
@@ -490,10 +513,9 @@ public static class VoltEngine
         {
             w.Return();
         }
-        if (devScript)
-            ctx.Output.Write(s_devScript); // M6: live-reload poller (dev only, GET only)
-        ctx.HasBody = true;
     }
+
+    private static bool MinifyEnabled(VoltOptions options) => options.MinifyHtml ?? VoltRuntime.HtmlMinifyDefault;
 
     /// <summary>Live-reload poll script bytes (dev only — never in production output).</summary>
     private static readonly byte[] s_devScript = Encoding.UTF8.GetBytes(VoltLiveReload.PollScript);
@@ -516,17 +538,14 @@ public static class VoltEngine
         ctx.ResponseStarted = true;
     }
 
-    private static byte[] RenderToBytes(VoltPage page, VoltRequest request, string path, string? token)
+    private static byte[] RenderToBytes(VoltPage page, VoltRequest request, string path, string? token, bool minify = false)
     {
         using var buffer = new PooledBufferWriter();
-        var w = HtmlWriter.Rent(buffer);
-        try
+        RenderInto(buffer, page, request, path, token);
+        if (minify)
         {
-            RenderPage(page, request, path, token, w);
-        }
-        finally
-        {
-            w.Return();
+            var span = buffer.WrittenSpanMutable;
+            buffer.Truncate(VoltHtmlMinifier.Minify(span, span));
         }
         return buffer.WrittenSpan.ToArray();
     }

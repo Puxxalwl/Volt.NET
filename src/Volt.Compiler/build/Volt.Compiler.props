@@ -15,6 +15,9 @@
       <LogicalName>volt.static.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <CompilerVisibleProperty Include="MSBuildProjectDirectory" />
+    <!-- M6: <VoltMinify>true</VoltMinify> — compile-time static-text minification
+         (.volt literals) + runtime HTML minification default for SSG/SSR output -->
+    <CompilerVisibleProperty Include="VoltMinify" />
     <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="VoltItem" />
   </ItemGroup>
 </Project>

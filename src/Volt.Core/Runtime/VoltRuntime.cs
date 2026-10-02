@@ -15,6 +15,9 @@ public static class VoltRuntime
     /// <summary>Dev mode: error pages show stack traces, no cache hardening.</summary>
     public static bool DevMode { get; set; }
 
+    /// <summary>M6: HTML minification default — set at compile time by the generator when the project has &lt;VoltMinify&gt;.</summary>
+    public static bool HtmlMinifyDefault { get; set; }
+
     /// <summary>Cache-busting version of the hydration script; set by the transport at startup.</summary>
     public static string HydrateVersion { get; set; } = "1";
 

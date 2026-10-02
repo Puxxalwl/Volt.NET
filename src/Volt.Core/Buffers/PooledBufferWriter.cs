@@ -23,7 +23,17 @@ public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
 
     public ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, _written);
 
+    /// <summary>Writable view of the written region (for in-place compaction — e.g. HTML minification).</summary>
+    public Span<byte> WrittenSpanMutable => _buffer.AsSpan(0, _written);
+
     public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _written);
+
+    /// <summary>Shrinks the written length (used by in-place HTML minification: output ≤ input).</summary>
+    public void Truncate(int newLength)
+    {
+        if (newLength < 0 || newLength > _written) throw new ArgumentOutOfRangeException(nameof(newLength));
+        _written = newLength;
+    }
 
     /// <summary>Keeps the rented buffer (if reasonably small) and resets the write position.</summary>
     public void Reset()
