@@ -381,6 +381,9 @@ public static class VoltEngine
     private static (int Capacity, string? Directory)? _ssgIdentity; // struct compare: no allocation
     private static readonly object SsgCacheLock = new();
 
+    /// <summary>M6: the currently-shared SSG cache (for VoltRuntime.RevalidateTag).</summary>
+    internal static SsgCache? GetSharedSsgCache() => _ssgCache;
+
     private static SsgCache GetSsgCache(VoltOptions options)
     {
         // NOTE: no string concat here — this runs on the zero-alloc fast path.
@@ -433,11 +436,11 @@ public static class VoltEngine
                     {
                         var freshPage = ResolveRoute(path)?.Factory() ?? page;
                         var bytes = RenderToBytes(freshPage, BuildMinimalRequest(path), path, token: null, minify: MinifyEnabled(options));
-                        cache.EndRefresh(path, bytes, SsgCache.ComputeETag(bytes), revalidateSeconds);
+                        cache.EndRefresh(path, bytes, SsgCache.ComputeETag(bytes), revalidateSeconds, page.Tags);
                     }
                     catch
                     {
-                        cache.EndRefresh(path, stale.html, stale.etag, revalidateSeconds); // keep old entry
+                        cache.EndRefresh(path, stale.html, stale.etag, revalidateSeconds, page.Tags); // keep old entry
                     }
                 });
             }
@@ -448,7 +451,7 @@ public static class VoltEngine
         await page.OnPreRenderAsync(request);
         html = RenderToBytes(page, request, path, token: null, minify: MinifyEnabled(options));
         etag = SsgCache.ComputeETag(html);
-        cache.Store(path, html, etag, page.RevalidateSeconds);
+        cache.Store(path, html, etag, page.RevalidateSeconds, page.Tags);
 
         if (IfNoneMatchMatches(ctx, etag))
         {
@@ -718,6 +721,75 @@ public static class VoltEngine
     // /_volt/* endpoints: hydration script, actions, fallback
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// M6: POST /_volt/revalidate — on-demand tag revalidation (urlencoded form:
+    /// tag=products, token=…; the token must match VoltOptions.RevalidateToken).
+    /// Returns text/plain with the evicted entry count.
+    /// </summary>
+    private static async Task HandleRevalidateAsync(VoltHttpContext ctx, VoltOptions options)
+    {
+        ctx.ContentType = "text/plain; charset=utf-8";
+        var w = ctx.Output;
+        var writer = w is null ? null : HtmlWriter.Rent(w);
+        try
+        {
+            void Reply(int status, string message)
+            {
+                ctx.StatusCode = status;
+                ctx.HasBody = true;
+                ctx.ResponseStarted = true;
+                writer?.Text(message);
+            }
+
+            if (options.RevalidateToken is not { Length: > 0 } expected)
+            {
+                Reply(404, "revalidation disabled (RevalidateToken not configured)");
+                return;
+            }
+
+            var fields = await ReadPostFieldsAsync(ctx);
+            string? tag = null, token = null;
+            foreach (var (name, value) in fields)
+            {
+                if (name.Equals("tag", StringComparison.OrdinalIgnoreCase)) tag = value;
+                else if (name.Equals("token", StringComparison.OrdinalIgnoreCase)) token = value;
+            }
+            // token also accepted via header
+            if (token is null && ctx.Headers is { } headers
+                && headers.TryGetHeader("X-Volt-Token"u8, out var headerToken))
+                token = Encoding.UTF8.GetString(headerToken);
+
+            if (token is null || !FixedTimeEquals(token, expected))
+            {
+                Reply(403, "invalid revalidation token");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(tag))
+            {
+                Reply(400, "missing 'tag' field");
+                return;
+            }
+
+            int evicted = RevalidateTag(tag);
+            Reply(200, evicted.ToString());
+        }
+        finally
+        {
+            writer?.Return();
+        }
+    }
+
+    /// <summary>Constant-time string comparison (token check — no early exit).</summary>
+    private static bool FixedTimeEquals(string a, string b)
+    {
+        if (a.Length != b.Length) return false;
+        int diff = 0;
+        for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
+        return diff == 0;
+    }
+
+    private static int RevalidateTag(string tag) => GetSharedSsgCache()?.RevalidateTag(tag) ?? 0;
+
     private static async Task HandleVoltEndpointAsync(VoltHttpContext ctx, VoltOptions options, string path, string method)
     {
         // M4: versioned hydrate asset — /_volt/hydrate.<hash>.js (immutable caching).
@@ -740,6 +812,10 @@ public static class VoltEngine
 
             case "/_volt/ping" when options.DevMode:
                 ServeLiveReloadPing(ctx);
+                return;
+
+            case "/_volt/revalidate" when method == "POST":
+                await HandleRevalidateAsync(ctx, options);
                 return;
 
             case "/_volt/metrics" when options.EnableMetrics:

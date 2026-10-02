@@ -308,3 +308,44 @@ public sealed class VoltMinifyTests
         }
     }
 }
+
+public sealed class VoltTagTests
+{
+    private static string RunGenerator(params (string Path, string Text)[] files)
+    {
+        var additionalTexts = files.Select(f => (AdditionalText)new InMemoryText(f.Path, f.Text)).ToArray();
+        var compilation = CSharpCompilation.Create("TestApp",
+            syntaxTrees: [CSharpSyntaxTree.ParseText("class Empty {}", new CSharpParseOptions(LanguageVersion.Latest))]);
+        var driver = CSharpGeneratorDriver.Create([new VoltGenerator().AsSourceGenerator()], additionalTexts: additionalTexts);
+        var result = driver.RunGenerators(compilation).GetRunResult();
+        var sb = new StringBuilder();
+        foreach (var tree in result.GeneratedTrees)
+        {
+            sb.AppendLine($"// ===== {tree.FilePath}");
+            sb.AppendLine(tree.GetText().ToString());
+        }
+        return sb.ToString();
+    }
+
+    private sealed class InMemoryText(string path, string content) : AdditionalText
+    {
+        public override string Path { get; } = path;
+        public override SourceText? GetText(CancellationToken ct) => SourceText.From(content, Encoding.UTF8);
+    }
+
+    [Fact]
+    public void TagDirective_EmitsTagsOverride()
+    {
+        var generated = RunGenerator(("/app/Pages/shop.volt",
+            "@page /shop\n@mode SSG\n@tag products, catalog\n\n<p>shop</p>"));
+
+        Assert.Contains("public override string[] Tags { get; } = [\"products\", \"catalog\"]", generated);
+    }
+
+    [Fact]
+    public void NoTagDirective_NoTagsOverride()
+    {
+        var generated = RunGenerator(("/app/Pages/plain.volt", "@page /plain\n@mode SSR\n\n<p>plain</p>"));
+        Assert.DoesNotContain("override string[] Tags", generated);
+    }
+}

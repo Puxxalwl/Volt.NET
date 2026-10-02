@@ -19,6 +19,7 @@ public static class VoltCli
                 "dev" => Dev(rest),
                 "build" => Build(rest),
                 "export" => Export(rest),
+                "revalidate" => Revalidate(rest),
                 "serve" => Serve(rest),
                 "wasm" => Wasm(rest),
                 "help" or "--help" or "-h" => Usage(),
@@ -87,6 +88,7 @@ public static class VoltCli
             Usage:
               volt new <path>                 scaffold a new app
               volt dev [path] [--port N]      dev server with hot reload (dotnet watch)
+              volt revalidate --url --tag --token   evict cached pages by tag
               volt build [path] [--rid R]     native AOT publish (default rid: linux-x64)
               volt export [path] [--out DIR]  export SSG pages to dist/ (default)
               volt serve [path] [--port N]    run the app without watch
@@ -157,6 +159,43 @@ public static class VoltCli
         if (port is not null) env["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
         Console.WriteLine($"volt dev: {project} (hot reload via dotnet watch)");
         return RunDotnet(["watch", "run", "--project", project], env);
+    }
+
+    /// <summary>volt revalidate --url http://host[:port] --tag products --token SECRET</summary>
+    private static int Revalidate(string[] args)
+    {
+        var url = FlagValue(args, "--url");
+        var tag = FlagValue(args, "--tag");
+        var token = FlagValue(args, "--token");
+        if (url is null || tag is null || token is null)
+        {
+            Console.WriteLine("usage: volt revalidate --url http://127.0.0.1:5000 --tag products --token SECRET");
+            return 1;
+        }
+        try
+        {
+            var baseUri = url.TrimEnd('/') + "/_volt/revalidate";
+            var content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["tag"] = tag,
+                ["token"] = token,
+            });
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            using var response = client.PostAsync(baseUri, content).GetAwaiter().GetResult();
+            var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult().Trim();
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"volt revalidate: evicted {body} cached page(s) with tag '{tag}'");
+                return 0;
+            }
+            Console.WriteLine($"volt revalidate failed: {(int)response.StatusCode} {body}");
+            return 2;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"volt revalidate failed: {ex.Message}");
+            return 2;
+        }
     }
 
     private static int Build(string[] args)

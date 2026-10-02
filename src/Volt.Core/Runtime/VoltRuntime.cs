@@ -15,6 +15,16 @@ public static class VoltRuntime
     /// <summary>Dev mode: error pages show stack traces, no cache hardening.</summary>
     public static bool DevMode { get; set; }
 
+    /// <summary>
+    /// M6: evicts cached SSG entries carrying <paramref name="tag"/> (from @tag / VoltPage.Tags).
+    /// Returns the evicted count. The next request re-renders each page.
+    /// </summary>
+    public static int RevalidateTag(string tag)
+    {
+        var cache = VoltEngine.GetSharedSsgCache();
+        return cache?.RevalidateTag(tag) ?? 0;
+    }
+
     /// <summary>M6: HTML minification default — set at compile time by the generator when the project has &lt;VoltMinify&gt;.</summary>
     public static bool HtmlMinifyDefault { get; set; }
 

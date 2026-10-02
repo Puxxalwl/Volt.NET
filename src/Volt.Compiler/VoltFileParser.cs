@@ -32,6 +32,8 @@ internal static class VoltFileParser
         public string Namespace = "Volt.Generated";
         public string Mode = "SSR";
         public int Revalidate = -1;
+        /// <summary>M6: @tag values (comma-separated) — on-demand revalidation groups.</summary>
+        public List<string> TagList = new();
         public bool IsNotFound;
         public bool IsError;
         public string RenderBody = "";
@@ -133,6 +135,15 @@ internal static class VoltFileParser
             {
                 if (int.TryParse(line.Substring("@revalidate ".Length).Trim(), out var seconds) && seconds >= 0)
                     model.Revalidate = seconds;
+            }
+            else if (line.StartsWith("@tag ", StringComparison.Ordinal))
+            {
+                foreach (var rawTag in line.Substring("@tag ".Length).Split(','))
+                {
+                    var tag = rawTag.Trim();
+                    if (tag.Length > 0 && !model.TagList.Contains(tag))
+                        model.TagList.Add(tag);
+                }
             }
             else if (line.StartsWith("@namespace ", StringComparison.Ordinal))
             {

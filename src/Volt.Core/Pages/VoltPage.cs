@@ -22,6 +22,13 @@ public abstract class VoltPage
     public virtual int RevalidateSeconds => 0;
 
     /// <summary>
+    /// M6: revalidation tags — cached SSG output carrying a tag can be evicted on demand
+    /// (VoltRuntime.RevalidateTag / POST /_volt/revalidate / `volt revalidate`).
+    /// .volt pages set them with the @tag directive.
+    /// </summary>
+    public virtual string[] Tags => Array.Empty<string>();
+
+    /// <summary>
     /// For dynamic SSG routes: raw values to prerender. "a/b" fills the route's
     /// dynamic segments in order (e.g. [slug] gets "a", [id] gets "b").
     /// </summary>

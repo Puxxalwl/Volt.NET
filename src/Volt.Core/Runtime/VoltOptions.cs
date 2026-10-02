@@ -16,6 +16,12 @@ public sealed class VoltOptions
     public bool DevMode { get; set; }
 
     /// <summary>
+    /// M6: shared secret enabling POST /_volt/revalidate (tag eviction) and `volt revalidate`.
+    /// null/empty (default) — the endpoint answers 404, on-demand revalidation is off.
+    /// </summary>
+    public string? RevalidateToken { get; set; }
+
+    /// <summary>
     /// M6: request metrics — lock-free counters + µs histogram, served as Prometheus
     /// text at /_volt/metrics and as a live page at /_volt/hud. Off by default.
     /// </summary>

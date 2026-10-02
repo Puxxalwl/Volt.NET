@@ -592,6 +592,11 @@ public sealed class VoltGenerator : IIncrementalGenerator
             page.AppendLine($"    public override RenderMode Mode => RenderMode.{model.Mode};");
             if (model.Revalidate >= 0)
                 page.AppendLine($"    public override int RevalidateSeconds => {model.Revalidate};");
+            if (model.TagList.Count > 0)
+            {
+                var literals = string.Join(", ", model.TagList.Select(t => SymbolDisplay.FormatLiteral(t, quote: true)));
+                page.AppendLine($"    public override string[] Tags {{ get; }} = [{literals}]; // M6: @tag");
+            }
             page.AppendLine();
             page.AppendLine("    public override void Render(HtmlWriter w, RenderContext ctx)");
             page.AppendLine("    {");

@@ -15,11 +15,14 @@ internal sealed class SsgCache
         public long RenderedAtUtcTicks;
         public int RevalidateSeconds;
         public int Refreshing; // 0/1 single-flight flag for background re-render
+        public string[] Tags = Array.Empty<string>(); // M6: revalidation tags (@tag)
     }
 
     private readonly ConcurrentDictionary<string, Entry> _map = new(StringComparer.Ordinal);
     private readonly Queue<string> _order = new();
     private readonly object _lock = new();
+    // M6: tag → paths (tag index for on-demand revalidation)
+    private readonly ConcurrentDictionary<string, HashSet<string>> _tags = new(StringComparer.Ordinal);
     private readonly int _capacity;
     private readonly ISsgCacheBackend? _backend;
     private readonly string? _identity;
@@ -71,10 +74,10 @@ internal sealed class SsgCache
         return true;
     }
 
-    public void Store(string path, byte[] html, string etag, int revalidateSeconds)
-        => Store(path, html, etag, revalidateSeconds, writeThrough: true, ticks: DateTime.UtcNow.Ticks);
+    public void Store(string path, byte[] html, string etag, int revalidateSeconds, string[]? tags = null)
+        => Store(path, html, etag, revalidateSeconds, writeThrough: true, ticks: DateTime.UtcNow.Ticks, tags);
 
-    private void Store(string path, byte[] html, string etag, int revalidateSeconds, bool writeThrough, long ticks)
+    private void Store(string path, byte[] html, string etag, int revalidateSeconds, bool writeThrough, long ticks, string[]? tags = null)
     {
         var entry = new Entry
         {
@@ -82,6 +85,7 @@ internal sealed class SsgCache
             ETag = etag,
             RenderedAtUtcTicks = ticks,
             RevalidateSeconds = revalidateSeconds,
+            Tags = tags ?? Array.Empty<string>(),
         };
         lock (_lock)
         {
@@ -89,12 +93,37 @@ internal sealed class SsgCache
             _order.Enqueue(path);
             while (_map.Count > _capacity && _order.TryDequeue(out var oldest))
                 _map.TryRemove(oldest, out _);
+
+            // M6: maintain the tag index under the same lock (single-writer ordering)
+            foreach (var tag in entry.Tags)
+            {
+                var set = _tags.GetOrAdd(tag, _ => new HashSet<string>(StringComparer.Ordinal));
+                set.Add(path);
+            }
         }
         if (writeThrough && _backend is not null)
         {
             try { _backend.Save(path, html, etag, ticks, revalidateSeconds); }
             catch (IOException) { /* shared storage hiccup: local LRU still serves */ }
         }
+    }
+
+    /// <summary>
+    /// M6: on-demand revalidation — evicts every cached entry carrying <paramref name="tag"/>.
+    /// The next request re-renders those pages (and the store refills). Returns the evicted count.
+    /// </summary>
+    public int RevalidateTag(string tag)
+    {
+        if (!_tags.TryGetValue(tag, out var paths)) return 0;
+        int evicted = 0;
+        lock (_lock)
+        {
+            foreach (var path in paths)
+                if (_map.TryRemove(path, out _))
+                    evicted++;
+            paths.Clear();
+        }
+        return evicted;
     }
 
     /// <summary>Single-flight claim for background re-render; returns true when this caller should refresh.</summary>
@@ -105,9 +134,9 @@ internal sealed class SsgCache
         return true;
     }
 
-    public void EndRefresh(string path, byte[] html, string etag, int revalidateSeconds)
+    public void EndRefresh(string path, byte[] html, string etag, int revalidateSeconds, string[]? tags = null)
     {
-        Store(path, html, etag, revalidateSeconds);
+        Store(path, html, etag, revalidateSeconds, tags);
         if (_map.TryGetValue(path, out var entry))
             Interlocked.Exchange(ref entry.Refreshing, 0);
     }
