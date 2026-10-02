@@ -1,7 +1,9 @@
 # ⚡ Volt.NET
 
 Fullstack C# framework: **SSG + SSR + island hydration** in one box. File-based routing,
-zero-allocation HTML rendering, built-in SEO, a CLI, and **Native AOT** single-binary output.
+zero-allocation HTML rendering, built-in SEO, a CLI, a **Razor-like .volt template syntax**,
+a choice of transports — the Kestrel bridge **or a built-in zero-allocation HTTP/1.1 server**
+(+58% throughput, half the memory) — and **Native AOT** single-binary output.
 
 ```csharp
 // Program.cs — the whole entry point
@@ -79,6 +81,11 @@ under a one-time token and redirects back — the island state survives a full p
 | Peak RSS (VmHWM, AOT) | **~17.5 MB** |
 | Native AOT binary (self-contained) | **8.3 MB** |
 | hydrate.js | **11 KB**, no dependencies |
+| Fast-path serve (route match + SSG cache hit + body) | **~3.2 µs**, **0 B allocated** |
+| Throughput, 8 keep-alive conns (built-in server vs Kestrel) | **26.6k vs 16.9k rps (+58%)** |
+| Request latency, sequential (built-in server vs Kestrel) | **0.15 vs 0.18 ms** |
+| Peak RSS JIT (built-in server vs Kestrel) | **47 vs 90 MB** |
+| AOT with the built-in server: startup / peak RSS | **~25 ms / ~6 MB** |
 
 Allocation gates are enforced by tests: `GC.GetAllocatedBytesForCurrentThread()` deltas are
 asserted to be exactly **0** for route matching and page rendering
@@ -91,7 +98,8 @@ hot path for page serving does not.
 ```
 src/Volt.Core/          rendering, routing, islands, SEO, export  (no dependencies)
 src/Volt.Compiler/      Roslyn source generator (routes + islands + serializers)
-src/Volt.Kestrel/       transport: Kestrel bridge, pipeline, SSG cache, endpoints
+src/Volt.Kestrel/       transport: Kestrel bridge (adapter over the shared engine)
+src/Volt.Server/        transport: built-in zero-alloc HTTP/1.1 server (keep-alive, pipelining)
 src/Volt.Hydration.JS/  hydrate.js runtime (embedded resource)
 src/Volt.Cli/           `volt` CLI (new / dev / build / export / serve)
 examples/starter/       demo app: SSG + dynamic route + island
@@ -112,6 +120,46 @@ tests/                  unit + compiler + E2E + benchmarks
 
 `ctx.Params.Get("slug")` reads route params (URL-decoded). Dynamic SSG pages implement
 `StaticPaths()` — each path is prerendered at export time and into the sitemap.
+
+## .volt templates (M2)
+
+Pages can also be `.volt` files — Razor-like markup compiled by the source generator into
+the same `VoltPage` render code (no runtime interpretation):
+
+```
+@page /docs/guide
+@mode SSG
+@revalidate 60
+
+<!DOCTYPE html>
+<html lang="en">
+<body>
+    <h1>Guide</h1>
+    @for (int i = 1; i <= 3; i++) {
+        <li>Item @i of 3</li>
+    }
+    @if (ctx.Request.Path.Length > 5) {
+        <p>path: @(ctx.Request.Path)</p>
+    }
+</body>
+</html>
+```
+
+Directives: `@page`, `@mode`, `@revalidate`, `@namespace`. In markup: `@expr` / `@(expr)`
+interpolate, `@{ … }` runs raw C#, `@@` is a literal `@`. Code blocks switch back to markup
+when a line starts with a tag. `notfound.volt` / `error.volt` are special pages.
+This site's [templates page](apps/docs/Pages/Templates.volt) is written in .volt.
+
+## Transports (M2)
+
+`VoltApp.Run` (Kestrel) or `VoltServerApp.Run` (built-in server) — the same engine
+([VoltEngine](src/Volt.Core/Hosting/VoltEngine.cs)) serves both:
+
+* **Built-in server**: hand-rolled HTTP/1.1 over raw sockets — pooled buffers, offset-based
+  parsing, keep-alive and pipelining, `Expect: 100-continue`, ETag/304, static assets from
+  memory. The per-request fast path (parse → route match → cached SSG serve) allocates
+  **0 bytes**, gated by tests.
+* **Kestrel bridge**: for TLS, HTTP/2/3 and the ASP.NET ecosystem.
 
 ## Render modes
 
@@ -143,7 +191,7 @@ volt serve [path] [--port N] run without watch
 ```bash
 dotnet build                          # builds everything
 DOTNET_ROLL_FORWARD=Major dotnet run --project examples/starter   # serve the demo
-DOTNET_ROLL_FORWARD=Major dotnet test # 68 tests: unit + compiler + E2E
+DOTNET_ROLL_FORWARD=Major dotnet test # 101 tests: unit + compiler + E2E (both transports)
 dotnet run -c Release --project tests/Volt.Benchmarks              # benchmarks
 ```
 
@@ -167,6 +215,10 @@ dotnet run -c Release --project tests/Volt.Benchmarks              # benchmarks
 
 ## Milestone status
 
-M1 (this repo): folder routing, islands + hydration, SSG/SSR/ISR, export, SEO, CLI,
-Native AOT, tests, benchmarks — **done**. Planned M2: custom zero-alloc server,
-WASM islands, `.volt` template syntax, dist bundling into the binary.
+M1: folder routing, islands + hydration, SSG/SSR/ISR, export, SEO, CLI, Native AOT,
+tests, benchmarks — **done**.
+
+M2: built-in zero-allocation HTTP/1.1 server (transport-neutral engine + Kestrel adapter,
++58% throughput, AOT ~25 ms / ~6 MB), `.volt` Razor-like templates, in-memory static
+assets — **done**. Planned M3: WASM islands, TLS on the built-in server, dist bundling
+into the binary, `<volt-island>` in .volt markup.

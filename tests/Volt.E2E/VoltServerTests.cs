@@ -205,6 +205,16 @@ public sealed class VoltServerTests : IClassFixture<ServerFixture>
         var response = Encoding.ASCII.GetString(buffer, 0, n);
         Assert.StartsWith("HTTP/1.1 400", response);
     }
+
+    [Fact]
+    public async Task VoltTemplatePage_RendersOnCustomServer()
+    {
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync(_fx.Url + "/templated");
+        Assert.Contains("<h1 class=\"headline\">From a .volt template</h1>", html);
+        Assert.Contains("<li>Item 2 of 3</li>", html);
+        Assert.Contains("<p id=\"path-echo\">path: /templated</p>", html);
+    }
 }
 
 public sealed class ServerFixture : IAsyncLifetime

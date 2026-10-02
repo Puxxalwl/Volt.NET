@@ -253,4 +253,19 @@ public sealed class VoltAppTests : IAsyncLifetime
         var response = await _client.PostAsync("/", new StringContent(""));
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
     }
+
+    [Fact]
+    public async Task VoltTemplatePage_RendersMarkupCodeAndExpressions()
+    {
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync(_url + "/templated");
+        Assert.StartsWith("<!DOCTYPE html>", html);
+        Assert.Contains("<html lang=\"en\">", html);
+        Assert.Contains("<h1 class=\"headline\">From a .volt template</h1>", html);
+        Assert.Contains("<li>Item 1 of 3</li>", html);
+        Assert.Contains("<li>Item 3 of 3</li>", html);
+        Assert.Contains("<p id=\"path-echo\">path: /templated</p>", html);
+        Assert.Contains("@literal", html);
+        Assert.EndsWith("</html>", html);
+    }
 }

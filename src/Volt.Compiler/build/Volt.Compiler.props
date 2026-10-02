@@ -3,6 +3,8 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/Pages')">
     <VoltPageFile Include="Pages/**/*.cs" />
     <AdditionalFiles Include="@(VoltPageFile)" VoltItem="Page" />
+    <VoltTemplateFile Include="Pages/**/*.volt" />
+    <AdditionalFiles Include="@(VoltTemplateFile)" VoltItem="VoltTemplate" />
   </ItemGroup>
   <!-- wwwroot: available next to the binary on plain `dotnet run` too (not only publish) -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/wwwroot')">

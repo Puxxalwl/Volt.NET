@@ -3,6 +3,7 @@
   <Project Path="src/Volt.Compiler/Volt.Compiler.csproj" />
   <Project Path="src/Volt.Hydration.JS/Volt.Hydration.JS.csproj" />
   <Project Path="src/Volt.Kestrel/Volt.Kestrel.csproj" />
+  <Project Path="src/Volt.Server/Volt.Server.csproj" />
   <Project Path="src/Volt.Cli/Volt.Cli.csproj" />
   <Project Path="examples/starter/Starter.csproj" />
   <Project Path="apps/docs/Docs.csproj" />
