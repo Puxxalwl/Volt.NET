@@ -34,21 +34,189 @@ public sealed class VoltGenerator : IIncrementalGenerator
 
     private static void RegisterVoltFilePipeline(IncrementalGeneratorInitializationContext context)
     {
+        // raw texts: parsing happens in the emit step — .volt files need cross-file
+        // knowledge (partial signatures, layout graph) that a per-file transform can't see
         var files = context.AdditionalTextsProvider
             .Where(file =>
             {
                 var path = file.Path.Replace('\\', '/');
                 return path.EndsWith(".volt", StringComparison.OrdinalIgnoreCase);
             })
-            .Select((file, ct) => VoltFileParser.Parse(file.Path, file.GetText(ct)?.ToString() ?? ""))
-            .WithTrackingName("VoltFiles")
+            .Select((file, ct) => (Path: file.Path, Text: file.GetText(ct)?.ToString() ?? ""))
+            .WithTrackingName("VoltFileTexts")
             .Collect();
 
-        context.RegisterSourceOutput(files, (spc, models) => EmitVoltFiles(spc, models));
+        context.RegisterSourceOutput(files, (spc, texts) => EmitVoltFiles(spc, texts));
     }
 
-    private static void EmitVoltFiles(SourceProductionContext spc, ImmutableArray<VoltFileParser.VoltFileModel> models)
+    // ------------------------------------------------------------------
+    // .volt emission: three passes over the collected texts
+    //   A. header scan → partial signatures + layout classification
+    //   B. full parse (partials table available for bodies)
+    //   C. layout graph resolution + compile-time splice into pages
+    // ------------------------------------------------------------------
+
+    private sealed class HeaderScan
     {
+        public bool IsLayout;
+        public string LayoutOverride = "";
+        public VoltFileParser.PartialSignature? Partial;
+    }
+
+    private static HeaderScan ScanHeader(string path, string text)
+    {
+        var scan = new HeaderScan { IsLayout = VoltFileParser.IsLayoutFile(path) };
+        int i = 0;
+        while (true)
+        {
+            int lineEnd = text.IndexOf('\n', i);
+            var line = (lineEnd < 0 ? text.Substring(i) : text.Substring(i, lineEnd - i)).Trim();
+
+            if (line.StartsWith("@layout ", StringComparison.Ordinal))
+                scan.LayoutOverride = line.Substring("@layout ".Length).Trim().Trim('"', '\'');
+            else if (line.StartsWith("@partial ", StringComparison.Ordinal))
+            {
+                var decl = line.Substring("@partial ".Length).Trim();
+                int open = decl.IndexOf('(');
+                string name = (open < 0 ? decl : decl.Substring(0, open)).Trim();
+                string type = "", pname = "";
+                if (open >= 0 && decl.EndsWith(")"))
+                {
+                    var param = decl.Substring(open + 1, decl.Length - open - 2).Trim();
+                    int space = param.LastIndexOf(' ');
+                    if (space > 0)
+                    {
+                        type = param.Substring(0, space).Trim();
+                        pname = param.Substring(space + 1).Trim();
+                    }
+                }
+                scan.Partial = new VoltFileParser.PartialSignature(name, type, pname);
+            }
+            else if (line.Length > 0 && !line.StartsWith("@", StringComparison.Ordinal))
+                break; // first content line: body starts here
+
+            if (lineEnd < 0) break;
+            i = lineEnd + 1;
+        }
+        return scan;
+    }
+
+    /// <summary>Directory (with trailing '/', normalized) that a .volt path lives in.</summary>
+    private static string DirOf(string filePath)
+    {
+        var normalized = filePath.Replace('\\', '/');
+        int slash = normalized.LastIndexOf('/');
+        return slash < 0 ? "" : normalized.Substring(0, slash + 1);
+    }
+
+    /// <summary>Layout name from the file stem: _Layout.volt → "", _AdminLayout.volt → "Admin".</summary>
+    private static string LayoutNameOf(string filePath)
+    {
+        var stem = Path.GetFileNameWithoutExtension(filePath);
+        if (stem.Length == 7) return ""; // _Layout
+        return stem.Substring(1, stem.Length - 1 - 6); // _<Name>Layout → <Name>
+    }
+
+    private sealed record LayoutEntry(string FilePath, string Dir, string Name, string Before, string After);
+
+    private static void EmitVoltFiles(SourceProductionContext spc, ImmutableArray<(string Path, string Text)> texts)
+    {
+        // ---- pass A: headers (partial signatures, layout overrides) -------------------
+        var partials = new Dictionary<string, VoltFileParser.PartialSignature>(StringComparer.Ordinal);
+        foreach (var (path, text) in texts)
+        {
+            var scan = ScanHeader(path, text);
+            if (scan.Partial is { } sig)
+            {
+                if (partials.TryGetValue(sig.Name, out var dup) && !string.Equals(dup.ParamType, sig.ParamType, StringComparison.Ordinal))
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        new DiagnosticDescriptor("VOLT023", "Volt partial", "duplicate partial name '{0}' ({1})", "Volt", DiagnosticSeverity.Error, true),
+                        Location.None, sig.Name, Path.GetFileName(path)));
+                    continue;
+                }
+                partials[sig.Name] = sig;
+            }
+        }
+
+        // ---- pass B: full parse with the partials table -------------------------------
+        var models = new List<VoltFileParser.VoltFileModel>(texts.Length);
+        foreach (var (path, text) in texts)
+            models.Add(VoltFileParser.Parse(path, text, partials));
+
+        // ---- layout index: (dir, lowercase name) → model --------------------------------
+        var layoutsByDir = new Dictionary<(string Dir, string Name), VoltFileParser.VoltFileModel>();
+        foreach (var model in models)
+        {
+            if (!model.IsLayout || model.Diagnostic.Length > 0) continue;
+            var key = (DirOf(model.FilePath), LayoutNameOf(model.FilePath).ToLowerInvariant());
+            if (layoutsByDir.ContainsKey(key))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("VOLT021", "Volt layout", "duplicate layout '{0}' in {1}", "Volt", DiagnosticSeverity.Error, true),
+                    Location.None, key.Item2.Length == 0 ? "_Layout" : key.Item2, key.Item1));
+                continue;
+            }
+            layoutsByDir[key] = model;
+        }
+
+        // resolve each layout's final splice (nested layouts), memoized
+        var resolvedLayouts = new Dictionary<string, LayoutEntry>();
+        LayoutEntry? ResolveLayout(VoltFileParser.VoltFileModel layout, HashSet<string> visiting)
+        {
+            if (resolvedLayouts.TryGetValue(layout.FilePath, out var cached)) return cached;
+            if (!visiting.Add(layout.FilePath))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("VOLT021", "Volt layout", "layout cycle involving '{0}'", "Volt", DiagnosticSeverity.Error, true),
+                    Location.None, Path.GetFileName(layout.FilePath)));
+                return null;
+            }
+
+            string before = layout.BodyBefore, after = layout.BodyAfter;
+            if (TryFindLayout(DirOf(layout.FilePath), layout.LayoutOverride, layout.FilePath, out var parent)
+                && parent is { } parentModel)
+            {
+                if (ResolveLayout(parentModel, visiting) is { } parentResolved)
+                {
+                    before = parentResolved.Before + before;
+                    after = after + parentResolved.After;
+                }
+                else return null;
+            }
+
+            visiting.Remove(layout.FilePath);
+            var entry = new LayoutEntry(layout.FilePath, DirOf(layout.FilePath), LayoutNameOf(layout.FilePath), before, after);
+            resolvedLayouts[layout.FilePath] = entry;
+            return entry;
+        }
+
+        bool TryFindLayout(string startDir, string requested, string? excludeFilePath, out VoltFileParser.VoltFileModel? found)
+        {
+            found = null;
+            if (requested.Equals("none", StringComparison.OrdinalIgnoreCase)) return false;
+            var name = requested.ToLowerInvariant(); // "" = default _Layout.volt
+            var dir = startDir;
+            while (dir.Length > 0)
+            {
+                if (layoutsByDir.TryGetValue((dir, name), out var model) && model.FilePath != excludeFilePath)
+                {
+                    found = model;
+                    return true;
+                }
+                int slash = dir.Length >= 2 ? dir.LastIndexOf('/', dir.Length - 2) : -1;
+                dir = slash < 0 ? "" : dir.Substring(0, slash + 1);
+            }
+            return false;
+        }
+
+        foreach (var model in models)
+        {
+            if (model.IsLayout && model.Diagnostic.Length == 0)
+                ResolveLayout(model, new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        // ---- pass C: emit pages (spliced) + partials ----------------------------------
         var sb = new StringBuilder(1024);
         sb.AppendLine("// <auto-generated> Volt .volt page registration — do not edit");
         sb.AppendLine("#nullable enable");
@@ -64,6 +232,18 @@ public sealed class VoltGenerator : IIncrementalGenerator
         sb.AppendLine("        internal static void Init()");
         sb.AppendLine("        {");
 
+        var partialSb = new StringBuilder(1024);
+        partialSb.AppendLine("// <auto-generated> Volt .volt partials — do not edit");
+        partialSb.AppendLine("#nullable enable");
+        partialSb.AppendLine("using System;");
+        partialSb.AppendLine("using Volt;");
+        partialSb.AppendLine();
+        partialSb.AppendLine("namespace Volt.Generated");
+        partialSb.AppendLine("{");
+        partialSb.AppendLine("    internal static class VoltPartials");
+        partialSb.AppendLine("    {");
+        bool anyPartial = false;
+
         foreach (var model in models)
         {
             if (model.Diagnostic.Length > 0)
@@ -72,6 +252,46 @@ public sealed class VoltGenerator : IIncrementalGenerator
                     new DiagnosticDescriptor("VOLT020", "Volt .volt page", "{0} ({1})", "Volt", DiagnosticSeverity.Error, true),
                     Location.None, model.Diagnostic, System.IO.Path.GetFileName(model.FilePath)));
                 continue;
+            }
+
+            if (model.IsPartial)
+            {
+                anyPartial = true;
+                var param = model.PartialParamType.Length > 0
+                    ? $", {model.PartialParamType} {model.PartialParamName}"
+                    : "";
+                partialSb.AppendLine($"        public static void {model.PartialName}(HtmlWriter w, RenderContext ctx{param})");
+                partialSb.AppendLine("        {");
+                partialSb.Append(model.RenderBody);
+                partialSb.AppendLine("        }");
+                continue;
+            }
+
+            if (model.IsLayout) continue; // consumed via splice
+
+            // resolve the page's layout (convention: nearest _Layout.volt up the tree)
+            string before = "", after = "";
+            VoltFileParser.VoltFileModel? layoutModel = null;
+            if (model.LayoutOverride.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                // explicit opt-out
+            }
+            else if (TryFindLayout(DirOf(model.FilePath), model.LayoutOverride, null, out var found) && found is not null)
+            {
+                layoutModel = found;
+            }
+            else if (model.LayoutOverride.Length > 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("VOLT021", "Volt layout", "@layout '{0}' not found for {1}", "Volt", DiagnosticSeverity.Error, true),
+                    Location.None, model.LayoutOverride, System.IO.Path.GetFileName(model.FilePath)));
+                continue;
+            }
+
+            if (layoutModel is not null && resolvedLayouts.TryGetValue(layoutModel.FilePath, out var layoutEntry))
+            {
+                before = layoutEntry.Before;
+                after = layoutEntry.After;
             }
 
             var typeRef = $"global::{model.Namespace}.{model.ClassName}";
@@ -88,7 +308,7 @@ public sealed class VoltGenerator : IIncrementalGenerator
                 sb.AppendLine($"            RouteRegistry.Root.Add({SymbolDisplay.FormatLiteral(model.Route, quote: true)}, static () => new {typeRef}());");
             }
 
-            // page class
+            // page class (layout spliced around the body at compile time — zero runtime cost)
             var page = new StringBuilder(2048);
             page.AppendLine("// <auto-generated> Volt .volt page — do not edit");
             page.AppendLine("#nullable enable");
@@ -104,7 +324,9 @@ public sealed class VoltGenerator : IIncrementalGenerator
             page.AppendLine();
             page.AppendLine("    public override void Render(HtmlWriter w, RenderContext ctx)");
             page.AppendLine("    {");
+            page.Append(before);
             page.Append(model.RenderBody);
+            page.Append(after);
             page.AppendLine("    }");
             page.AppendLine("}");
             spc.AddSource($"{model.ClassName}.g.cs", SourceText.From(page.ToString(), Encoding.UTF8));
@@ -114,6 +336,13 @@ public sealed class VoltGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
         sb.AppendLine("}");
         spc.AddSource("VoltFilesInit.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+
+        if (anyPartial)
+        {
+            partialSb.AppendLine("    }");
+            partialSb.AppendLine("}");
+            spc.AddSource("VoltPartials.g.cs", SourceText.From(partialSb.ToString(), Encoding.UTF8));
+        }
     }
 
     // ==================================================================

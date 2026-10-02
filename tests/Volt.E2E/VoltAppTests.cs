@@ -63,6 +63,45 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("<h1>Post: second</h1>", await _client.GetStringAsync("/blog/second"));
     }
 
+    // ---- M6: layouts + partials (compile-time splice, zero runtime cost) ----------
+
+    [Fact]
+    public async Task LayoutSplicesAroundSsgPage()
+    {
+        var html = await _client.GetStringAsync("/layouted");
+        Assert.Contains("<!DOCTYPE html>", html);
+        Assert.Contains("<title>Volt — layouted</title>", html);
+        Assert.Contains("<nav class=\"site-nav\">layout-nav</nav>", html);
+        Assert.Contains("<main>", html);
+        Assert.Contains("<h1>Layouted index</h1>", html);
+        Assert.Contains("<footer>layout-footer</footer>", html);
+        // the body lands inside <main> — layout before, page, layout after
+        Assert.True(html.IndexOf("site-nav") < html.IndexOf("Layouted index"));
+        Assert.True(html.IndexOf("Layouted index") < html.IndexOf("layout-footer"));
+    }
+
+    [Fact]
+    public async Task LayoutSplicesAroundSsrPage_AndPartialRendersModel()
+    {
+        var html = await _client.GetStringAsync("/layouted/about");
+        Assert.Contains("<nav class=\"site-nav\">layout-nav</nav>", html);
+        Assert.Contains("<h1>Layouted about</h1>", html);
+        // partial call @Card(widget) inside the layouted page
+        Assert.Contains("<div class=\"card\">", html);
+        Assert.Contains("<h3>About widget</h3>", html);
+        Assert.Contains("<span>7</span>", html);
+    }
+
+    [Fact]
+    public async Task LayoutedRoutesAreInSitemap()
+    {
+        var sitemap = await _client.GetStringAsync("/sitemap.xml");
+        Assert.Contains("/layouted</loc>", sitemap);
+        Assert.Contains("/layouted/about</loc>", sitemap);
+        // partials and layouts never become routes
+        Assert.DoesNotContain("partials", sitemap);
+    }
+
     [Fact]
     public async Task UnknownRouteReturns404Page()
     {

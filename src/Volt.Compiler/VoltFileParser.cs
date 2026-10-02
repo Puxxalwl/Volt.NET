@@ -18,6 +18,12 @@ internal static class VoltFileParser
 
     private static readonly string[] CodeKeywords = { "if", "for", "foreach", "while", "using", "switch", "do", "else", "try", "catch", "finally" };
 
+    /// <summary>Signature of a declared partial (from the first @partial pass).</summary>
+    public readonly record struct PartialSignature(string Name, string ParamType, string ParamName)
+    {
+        public bool HasParam => ParamType.Length > 0;
+    }
+
     public sealed class VoltFileModel
     {
         public string FilePath = "";
@@ -30,17 +36,60 @@ internal static class VoltFileParser
         public bool IsError;
         public string RenderBody = "";
         public string Diagnostic = "";
+        // layout composition (spliced at compile time — no runtime base class)
+        public bool IsLayout;                 // _Layout.volt / _AdminLayout.volt
+        public string LayoutOverride = "";    // "" (convention) | "none" | "Admin"
+        public string BodyBefore = "";        // layout: code before @renderbody
+        public string BodyAfter = "";         // layout: code after @renderbody
+        // partials
+        public bool IsPartial;                // has @partial declaration
+        public string PartialName = "";
+        public string PartialParamType = "";
+        public string PartialParamName = "";
     }
 
-    public static VoltFileModel Parse(string filePath, string text)
+    public static VoltFileModel Parse(string filePath, string text,
+        IReadOnlyDictionary<string, PartialSignature> partials)
     {
         var model = new VoltFileModel { FilePath = filePath, ClassName = SafeName(filePath) };
+        model.IsLayout = IsLayoutFile(filePath);
 
         try
         {
             var body = ParseDirectives(text, model);
-            model.RenderBody = new BodyParser(body).Parse();
-            if (model.Route.Length == 0 && !model.IsNotFound && !model.IsError)
+            model.IsPartial = model.PartialName.Length > 0;
+            if (model.IsLayout)
+            {
+                if (model.PartialName.Length > 0)
+                    throw new FormatException("layout files cannot declare @partial");
+                if (model.Route.Length > 0)
+                    throw new FormatException("layout files cannot declare @page");
+            }
+            if (model.IsPartial && model.Route.Length > 0)
+                throw new FormatException("partials cannot declare @page");
+
+            // '_'-prefixed files are never routes: they must be layouts or declare @partial
+            var stem = System.IO.Path.GetFileNameWithoutExtension(filePath.Replace('\\', '/'));
+            if (stem.StartsWith("_", StringComparison.Ordinal) && !model.IsLayout && !model.IsPartial)
+                throw new FormatException(
+                    "files starting with '_' are non-routable: use _Layout.volt/_NameLayout.volt or declare @partial");
+
+            var parser = new BodyParser(body, model.IsLayout, model.IsPartial, partials);
+            var code = parser.Parse();
+            if (model.IsLayout)
+            {
+                if (parser.RenderBodyMark < 0)
+                    throw new FormatException("layout must contain @renderbody");
+                model.BodyBefore = code.Substring(0, parser.RenderBodyMark);
+                model.BodyAfter = code.Substring(parser.RenderBodyMark);
+            }
+            else
+            {
+                model.RenderBody = code;
+                if (parser.RenderBodyMark >= 0)
+                    throw new FormatException("@renderbody is only allowed in layout files");
+            }
+            if (model.Route.Length == 0 && !model.IsNotFound && !model.IsError && !model.IsLayout && !model.IsPartial)
                 model.Route = RouteFromVoltPath(filePath);
         }
         catch (Exception ex)
@@ -48,6 +97,15 @@ internal static class VoltFileParser
             model.Diagnostic = $"VOLT020: .volt parse error: {ex.Message}";
         }
         return model;
+    }
+
+    /// <summary>_Layout.volt / _AdminLayout.volt — never routes.</summary>
+    internal static bool IsLayoutFile(string filePath)
+    {
+        var stem = System.IO.Path.GetFileNameWithoutExtension(filePath.Replace('\\', '/'));
+        return stem.StartsWith("_", StringComparison.Ordinal)
+               && (stem.Length == 7 && stem.Equals("_layout", StringComparison.OrdinalIgnoreCase)
+                   || (stem.Length > 7 && stem.EndsWith("layout", StringComparison.OrdinalIgnoreCase)));
     }
 
     // ------------------------------------------------------------------
@@ -79,6 +137,39 @@ internal static class VoltFileParser
             else if (line.StartsWith("@namespace ", StringComparison.Ordinal))
             {
                 model.Namespace = line.Substring("@namespace ".Length).Trim();
+            }
+            else if (line.StartsWith("@layout ", StringComparison.Ordinal))
+            {
+                model.LayoutOverride = line.Substring("@layout ".Length).Trim().Trim('"', '\'');
+                if (model.LayoutOverride.Length == 0)
+                    throw new FormatException("@layout requires a layout name or 'none'");
+            }
+            else if (line.StartsWith("@partial ", StringComparison.Ordinal))
+            {
+                // @partial Card
+                // @partial Card(Product item)
+                var decl = line.Substring("@partial ".Length).Trim();
+                int open = decl.IndexOf('(');
+                if (open < 0 || !decl.EndsWith(")"))
+                {
+                    model.PartialName = decl.Trim();
+                    if (model.PartialName.Length == 0)
+                        throw new FormatException("@partial requires a name");
+                    model.PartialParamType = "";
+                    model.PartialParamName = "";
+                }
+                else
+                {
+                    model.PartialName = decl.Substring(0, open).Trim();
+                    var param = decl.Substring(open + 1, decl.Length - open - 2).Trim();
+                    int space = param.LastIndexOf(' ');
+                    if (space < 0)
+                        throw new FormatException("@partial parameter must be 'Type name' (e.g. @partial Card(Product item))");
+                    model.PartialParamType = param.Substring(0, space).Trim();
+                    model.PartialParamName = param.Substring(space + 1).Trim();
+                    if (model.PartialName.Length == 0 || model.PartialParamType.Length == 0 || model.PartialParamName.Length == 0)
+                        throw new FormatException("@partial declaration is malformed");
+                }
             }
             else if (line.Length == 0)
             {
@@ -115,8 +206,21 @@ internal static class VoltFileParser
         private readonly string _t;
         private readonly StringBuilder _sb = new(4096);
         private int _i;
+        private readonly bool _isLayout;
+        private readonly bool _isPartial;
+        private readonly IReadOnlyDictionary<string, PartialSignature> _partials;
 
-        public BodyParser(string text) => _t = text;
+        /// <summary>For layouts: code length in front of @renderbody; -1 when absent.</summary>
+        public int RenderBodyMark = -1;
+
+        public BodyParser(string text, bool isLayout, bool isPartial,
+            IReadOnlyDictionary<string, PartialSignature> partials)
+        {
+            _t = text;
+            _isLayout = isLayout;
+            _isPartial = isPartial;
+            _partials = partials;
+        }
 
         /// <summary>Top-level: markup with @-transitions.</summary>
         public string Parse()
@@ -474,6 +578,44 @@ internal static class VoltFileParser
                 _sb.AppendLine($"            w.Text(({expr}).ToString());");
                 _i = end + 1;
                 return;
+            }
+
+            // '@renderbody' — layout body slot marker
+            if (_t.AsSpan(_i + 1).StartsWith("renderbody", StringComparison.Ordinal))
+            {
+                int after = _i + 1 + "renderbody".Length;
+                if (after >= _t.Length || !char.IsLetterOrDigit(_t[after]))
+                {
+                    if (!_isLayout)
+                        throw new FormatException("@renderbody is only allowed in layout files");
+                    if (RenderBodyMark >= 0)
+                        throw new FormatException("only one @renderbody per layout");
+                    _i = after;
+                    RenderBodyMark = _sb.Length;
+                    return;
+                }
+            }
+
+            // partial call: @Name(expr) where Name is a declared partial
+            {
+                int p = _i + 1;
+                while (p < _t.Length && (char.IsLetterOrDigit(_t[p]) || _t[p] == '_')) p++;
+                var pword = _t.Substring(_i + 1, p - _i - 1);
+                if (pword.Length > 0 && _partials.ContainsKey(pword))
+                {
+                    if (_isPartial)
+                        throw new FormatException($"partial '{pword}' cannot call another partial (keep partials flat)");
+                    while (p < _t.Length && char.IsWhiteSpace(_t[p])) p++;
+                    if (p < _t.Length && _t[p] == '(')
+                    {
+                        int end = FindMatchingParen(_t, p);
+                        var args = _t.Substring(p + 1, end - p - 1).Trim();
+                        _i = end + 1;
+                        _sb.AppendLine($"            global::Volt.Generated.VoltPartials.{pword}(w, ctx{(args.Length > 0 ? ", " + args : "")});");
+                        return;
+                    }
+                    throw new FormatException($"partial call '@{pword}' requires parentheses: @{pword}(model)");
+                }
             }
 
             // keyword statement: @if (…) { … }
