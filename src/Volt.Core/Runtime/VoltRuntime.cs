@@ -31,7 +31,7 @@ public static class VoltRuntime
     public static void SetHydrateScript(byte[] script)
     {
         HydrateScript = script;
-        HydrateVersion = Fnv1a64(script).ToString("x8");
+        HydrateVersion = Fnv1a64(script).ToString("x16");
         HydrateScriptETag = "\"" + Fnv1a64(script).ToString("x16") + "\"";
     }
 
@@ -46,5 +46,9 @@ public static class VoltRuntime
         return hash;
     }
 
-    internal static string HydrateScriptSrc => "/_volt/hydrate.js?v=" + HydrateVersion;
+    /// <summary>
+    /// Versioned (content-hash) hydrate script URL — served with immutable caching.
+    /// The legacy /_volt/hydrate.js URL keeps working (ETag/304).
+    /// </summary>
+    internal static string HydrateScriptSrc => "/_volt/hydrate." + HydrateVersion + ".js";
 }

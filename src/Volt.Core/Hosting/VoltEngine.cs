@@ -291,17 +291,27 @@ public static class VoltEngine
     // ------------------------------------------------------------------
 
     private static SsgCache? _ssgCache;
+    private static (int Capacity, string? Directory)? _ssgIdentity; // struct compare: no allocation
     private static readonly object SsgCacheLock = new();
 
     private static SsgCache GetSsgCache(VoltOptions options)
     {
+        // NOTE: no string concat here — this runs on the zero-alloc fast path.
+        (int, string?) identity = (options.SsgCacheCapacity, options.SsgCacheDirectory);
         var cache = _ssgCache;
-        if (cache is null || cache.Capacity != options.SsgCacheCapacity)
+        if (cache is null || _ssgIdentity != identity)
         {
             lock (SsgCacheLock)
             {
-                if (_ssgCache is null || _ssgCache.Capacity != options.SsgCacheCapacity)
-                    _ssgCache = new SsgCache(options.SsgCacheCapacity);
+                if (_ssgCache is null || _ssgIdentity != identity)
+                {
+                    var backend = options.SsgCacheDirectory is { Length: > 0 } dir
+                        ? new FileSsgCacheBackend(dir)
+                        : null;
+                    _ssgCache = new SsgCache(options.SsgCacheCapacity, backend,
+                        options.SsgCacheCapacity + "|" + options.SsgCacheDirectory);
+                    _ssgIdentity = identity;
+                }
                 cache = _ssgCache;
             }
         }
@@ -531,6 +541,18 @@ public static class VoltEngine
 
     private static async Task HandleVoltEndpointAsync(VoltHttpContext ctx, VoltOptions options, string path, string method)
     {
+        // M4: versioned hydrate asset — /_volt/hydrate.<hash>.js (immutable caching).
+        // A mismatched hash 404s so stale clients never cache the wrong script forever.
+        const int PrefixLen = 15; // "/_volt/hydrate."
+        if (path.Length == PrefixLen + 16 + 3
+            && path.StartsWith("/_volt/hydrate.", StringComparison.Ordinal)
+            && path.EndsWith(".js", StringComparison.Ordinal)
+            && path.AsSpan(PrefixLen, 16).SequenceEqual(VoltRuntime.HydrateVersion))
+        {
+            ServeHydrateScript(ctx);
+            return;
+        }
+
         switch (path)
         {
             case "/_volt/hydrate.js":

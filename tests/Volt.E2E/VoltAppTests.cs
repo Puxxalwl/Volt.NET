@@ -44,7 +44,7 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("data-props=\"{&quot;text&quot;:&quot;hello&quot;,&quot;count&quot;:0,&quot;done&quot;:false}\"", html);
         Assert.Contains("action=\"/_volt/fallback\"", html);
         Assert.Contains("name=\"__volt_island\" value=\"Todo\"", html);
-        Assert.Contains("/_volt/hydrate.js?v=", html);
+        Assert.Matches("/_volt/hydrate\\.[0-9a-f]{16}\\.js", html); // M4: versioned immutable URL
         Assert.Contains("hello #0", html);
     }
 
@@ -279,7 +279,7 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("<volt-island", html);
         Assert.Contains("data-v=\"Todo\"", html);
         Assert.Contains("wire state #2", html);
-        Assert.Contains("hydrate.js", html);
+        Assert.Matches("/_volt/hydrate\\.[0-9a-f]{16}\\.js", html); // M4 versioned URL
     }
 
     [Fact]
@@ -291,5 +291,27 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("data-v=\"Calc\"", html);
         Assert.Contains("data-v-wasm=\"/islands/calc.wasm\"", html);
         Assert.Contains("data-props=\"{&quot;value&quot;:7}\"", html);
+    }
+
+    [Fact]
+    public async Task HydrateJs_ServesImmutableVersionedUrl()
+    {
+        using var http = new HttpClient();
+        // the page references the hashed URL
+        var html = await http.GetStringAsync(_url + "/");
+        var srcMatch = System.Text.RegularExpressions.Regex.Match(html, "src=\"([^\"]*hydrate[^\"]*)\"");
+        Assert.True(srcMatch.Success, "page must reference hydrate.js");
+        var src = srcMatch.Groups[1].Value;
+        Assert.Matches("/_volt/hydrate\\.[0-9a-f]{16}\\.js", src);
+
+        // the versioned asset is served with immutable caching
+        using var res = await http.GetAsync(_url + src);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("public, max-age=31536000, immutable", res.Headers.CacheControl?.ToString());
+        Assert.NotNull(res.Headers.ETag);
+
+        // a wrong version must not be cached forever by a stale client
+        using var stale = await http.GetAsync(_url + "/_volt/hydrate.deadbeef.js");
+        Assert.Equal(HttpStatusCode.NotFound, stale.StatusCode);
     }
 }

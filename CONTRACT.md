@@ -28,7 +28,10 @@ Notes:
 - The hydration boot script is emitted **once per document**, right after the first island:
 
 ```html
-<script src="/_volt/hydrate.js?v=<version>" defer></script>
+<script src="/_volt/hydrate.<16-hex-fnv-hash>.js" defer></script>
+        (M4: versioned URL, served with `Cache-Control: public, max-age=31536000, immutable`;
+        the legacy `/_volt/hydrate.js` URL keeps working with ETag/304; a hashed
+        URL with a mismatched version returns 404)
 ```
 
 - Interactive elements carry `data-v-on="<event>:<actionName>"`.
@@ -129,3 +132,8 @@ server flow sends (`island` name, action name, state object, args object).
 **Module authors**: any language that can export the four symbols above works.
 For C# components, a future `wasm` build mode of the Volt generator is planned
 (the component render/dispatch code compiles to the same contract).
+
+**Tooling (M4)**: `volt wasm validate <module.wasm>` checks a module against this
+contract (parses the binary, verifies the exports and signatures) — wire it into CI.
+The reference conformance test `tests/Volt.E2E/wasm-conformance.js` runs the protocol
+against `tests/fixtures/calc.wasm` under Node.

@@ -18,7 +18,7 @@ public sealed class VoltServerTests : IClassFixture<ServerFixture>
         var html = await http.GetStringAsync(_fx.Url + "/");
         Assert.Contains("<volt-island", html);
         Assert.Contains("data-v", html);
-        Assert.Contains("hydrate.js", html);
+        Assert.Matches("/_volt/hydrate\\.[0-9a-f]{16}\\.js", html); // M4 versioned URL
         Assert.Contains("<!DOCTYPE html>", html);
     }
 
@@ -218,7 +218,7 @@ public sealed class VoltServerTests : IClassFixture<ServerFixture>
         Assert.Contains("<volt-island", html);
         Assert.Contains("data-v=\"Todo\"", html);
         Assert.Contains("wire state #2", html);
-        Assert.Contains("hydrate.js", html);
+        Assert.Matches("/_volt/hydrate\\.[0-9a-f]{16}\\.js", html); // M4 versioned URL
     }
 
     [Fact]

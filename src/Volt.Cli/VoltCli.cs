@@ -20,6 +20,7 @@ public static class VoltCli
                 "build" => Build(rest),
                 "export" => Export(rest),
                 "serve" => Serve(rest),
+                "wasm" => Wasm(rest),
                 "help" or "--help" or "-h" => Usage(),
                 _ => Unknown(command),
             };
@@ -29,6 +30,46 @@ public static class VoltCli
             Console.Error.WriteLine($"volt: {ex.Message}");
             return 1;
         }
+    }
+
+    private static int Wasm(string[] args)
+    {
+        if (args.Length != 2 || args[0] != "validate")
+        {
+            Console.Error.WriteLine("usage: volt wasm validate <file.wasm>");
+            return 1;
+        }
+        var path = args[1];
+        if (!File.Exists(path))
+        {
+            Console.Error.WriteLine($"volt: file not found: {path}");
+            return 1;
+        }
+
+        WasmContractResult result;
+        try
+        {
+            result = WasmContractValidator.Validate(File.ReadAllBytes(path));
+        }
+        catch (IOException ex)
+        {
+            Console.Error.WriteLine($"volt: cannot read {path}: {ex.Message}");
+            return 1;
+        }
+
+        foreach (var export in result.Exports)
+            Console.WriteLine("  " + export);
+
+        if (result.Valid)
+        {
+            Console.WriteLine($"OK: {Path.GetFileName(path)} satisfies the Volt island module contract");
+            return 0;
+        }
+
+        foreach (var error in result.Errors)
+            Console.Error.WriteLine($"volt: {error}");
+        Console.Error.WriteLine($"FAIL: {Path.GetFileName(path)} does not satisfy the Volt island module contract (see CONTRACT.md)");
+        return 1;
     }
 
     private static int Unknown(string command)
@@ -49,6 +90,7 @@ public static class VoltCli
               volt build [path] [--rid R]     native AOT publish (default rid: linux-x64)
               volt export [path] [--out DIR]  export SSG pages to dist/ (default)
               volt serve [path] [--port N]    run the app without watch
+              volt wasm validate <file.wasm> check an island module against the CONTRACT
 
             Options:
               --no-aot       build without Native AOT

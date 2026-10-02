@@ -21,8 +21,18 @@ internal sealed class SsgCache
     private readonly Queue<string> _order = new();
     private readonly object _lock = new();
     private readonly int _capacity;
+    private readonly ISsgCacheBackend? _backend;
+    private readonly string? _identity;
 
-    public SsgCache(int capacity) => _capacity = Math.Max(1, capacity);
+    public SsgCache(int capacity, ISsgCacheBackend? backend = null, string? identity = null)
+    {
+        _capacity = Math.Max(1, capacity);
+        _backend = backend;
+        _identity = identity;
+    }
+
+    /// <summary>Identity used to pick the shared static instance (capacity + backend identity).</summary>
+    public string? Identity => _identity;
 
     public int Capacity => _capacity;
 
@@ -32,7 +42,27 @@ internal sealed class SsgCache
         etag = "";
         fresh = false;
         revalidateSeconds = 0;
-        if (!_map.TryGetValue(path, out var entry)) return false;
+        if (!_map.TryGetValue(path, out var entry))
+        {
+            // local miss: consult the shared/persistent backend and promote into the LRU
+            if (_backend is null) return false;
+            if (!_backend.TryLoad(path, out var storedHtml, out var storedEtag, out var storedTicks, out var storedRevalidate))
+                return false;
+            entry = new Entry
+            {
+                Html = storedHtml,
+                ETag = storedEtag,
+                RenderedAtUtcTicks = storedTicks,
+                RevalidateSeconds = storedRevalidate,
+            };
+            Store(path, storedHtml, storedEtag, storedRevalidate, writeThrough: false, ticks: storedTicks);
+            html = entry.Html;
+            etag = entry.ETag;
+            revalidateSeconds = entry.RevalidateSeconds;
+            fresh = entry.RevalidateSeconds <= 0
+                || (DateTime.UtcNow.Ticks - entry.RenderedAtUtcTicks) / TimeSpan.TicksPerSecond < entry.RevalidateSeconds;
+            return true;
+        }
         html = entry.Html;
         etag = entry.ETag;
         revalidateSeconds = entry.RevalidateSeconds;
@@ -42,12 +72,15 @@ internal sealed class SsgCache
     }
 
     public void Store(string path, byte[] html, string etag, int revalidateSeconds)
+        => Store(path, html, etag, revalidateSeconds, writeThrough: true, ticks: DateTime.UtcNow.Ticks);
+
+    private void Store(string path, byte[] html, string etag, int revalidateSeconds, bool writeThrough, long ticks)
     {
         var entry = new Entry
         {
             Html = html,
             ETag = etag,
-            RenderedAtUtcTicks = DateTime.UtcNow.Ticks,
+            RenderedAtUtcTicks = ticks,
             RevalidateSeconds = revalidateSeconds,
         };
         lock (_lock)
@@ -56,6 +89,11 @@ internal sealed class SsgCache
             _order.Enqueue(path);
             while (_map.Count > _capacity && _order.TryDequeue(out var oldest))
                 _map.TryRemove(oldest, out _);
+        }
+        if (writeThrough && _backend is not null)
+        {
+            try { _backend.Save(path, html, etag, ticks, revalidateSeconds); }
+            catch (IOException) { /* shared storage hiccup: local LRU still serves */ }
         }
     }
 

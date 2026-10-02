@@ -193,6 +193,9 @@ function bindOn(eventType, opts) {
   );
 }
 
+// browser bootstrap (guarded: the same file is require()d under Node by the
+// wasm protocol conformance tests)
+if (typeof document !== "undefined") {
 bindOn('click');
 bindOn('change');
 
@@ -434,9 +437,14 @@ function boot() {
   observeLinks();
   history.replaceState({ volt: true, scroll: window.scrollY }, '');
 }
-
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', boot);
 } else {
   boot();
+}
+} // end browser bootstrap
+
+// Node test hook: lets tests exercise the WASM protocol path of THIS file.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { loadWasmModule, wasmWriteString, wasmReadString, wasmDispatchIsland };
 }

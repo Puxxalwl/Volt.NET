@@ -21,12 +21,21 @@ public sealed class VoltOptions
     /// <summary>Capacity of the in-memory SSG page cache (pages).</summary>
     public int SsgCacheCapacity { get; set; } = 256;
 
+    /// <summary>
+    /// M4: shared file directory for the SSG cache. When set, rendered pages persist
+    /// (atomic writes) and are visible to other instances using the same directory —
+    /// warm caches across restarts and multi-node shared-disk deployments.
+    /// Env: VOLT_SSG_CACHE_DIR.
+    /// </summary>
+    public string? SsgCacheDirectory { get; set; }
+
     public static VoltOptions FromEnvironment()
     {
         var dev = Environment.GetEnvironmentVariable("VOLT_DEV") == "1"
             || Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development";
         var baseUrl = Environment.GetEnvironmentVariable("VOLT_BASE_URL");
         var exportPath = Environment.GetEnvironmentVariable("VOLT_DIST") ?? "dist";
-        return new VoltOptions { BaseUrl = baseUrl, DevMode = dev, ExportPath = exportPath };
+        var ssgCacheDir = Environment.GetEnvironmentVariable("VOLT_SSG_CACHE_DIR");
+        return new VoltOptions { BaseUrl = baseUrl, DevMode = dev, ExportPath = exportPath, SsgCacheDirectory = ssgCacheDir };
     }
 }

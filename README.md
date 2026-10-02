@@ -150,7 +150,8 @@ interpolate, `@{ … }` runs raw C#, `@@` is a literal `@`. Code blocks switch b
 when a line starts with a tag. `notfound.volt` / `error.volt` are special pages.
 Islands embed directly: `<volt-island name="Counter" state='{"count":0}' />`
 (a `[VoltIsland(Wasm = "…")]` component adds `data-v-wasm` and dispatches client-side —
-[the module contract](CONTRACT.md)).
+[the module contract](CONTRACT.md); `volt wasm validate module.wasm` checks a module
+against it).
 This site's [templates page](apps/docs/Pages/Templates.volt) is written in .volt.
 
 ## Transports (M2)
@@ -201,6 +202,21 @@ Why Volt is lean by construction:
 * **Serve from memory.** The zero-alloc fast path answers a cached SSG page in
   ~3.2 µs with 0 bytes allocated; assets are embedded in the single binary.
 
+## M4: shared cache, immutable assets, wasm tooling
+
+* **Shared/distributed SSG cache** — `VoltOptions.SsgCacheDirectory` (env
+  `VOLT_SSG_CACHE_DIR`): rendered pages persist to disk (atomic writes) and are
+  visible to every instance pointing at the same directory — warm caches across
+  restarts and multi-node shared-disk deployments. The in-process LRU stays in
+  front; a render-counter test proves a second instance serves without re-rendering.
+* **Immutable hydrate asset** — pages reference `/_volt/hydrate.<fnv16>.js`,
+  served with `Cache-Control: public, max-age=31536000, immutable`. A stale hash
+  404s, so clients never cache the wrong script forever. The legacy URL works.
+* **`volt wasm validate`** — parses wasm binaries and checks the island module
+  contract (memory/alloc/volt_dispatch/volt_render signatures). The protocol is
+  conformance-tested against a real hand-emitted module under Node
+  (`tests/Volt.E2E/wasm-conformance.js`).
+
 ## Render modes
 
 * **SSG** (`Mode => RenderMode.SSG`): rendered once, cached in a bounded LRU (256 entries),
@@ -231,7 +247,7 @@ volt serve [path] [--port N] run without watch
 ```bash
 dotnet build                          # builds everything
 DOTNET_ROLL_FORWARD=Major dotnet run --project examples/starter   # serve the demo
-DOTNET_ROLL_FORWARD=Major dotnet test # 112 tests: unit + compiler + E2E (both transports)
+DOTNET_ROLL_FORWARD=Major dotnet test # 123 tests: unit + compiler + E2E (both transports)
 dotnet run -c Release --project tests/Volt.Benchmarks              # benchmarks
 ```
 
@@ -265,5 +281,9 @@ assets — **done**.
 M3: `<volt-island>` in .volt markup, WASM island protocol (client-side dispatch,
 module contract in CONTRACT.md), TLS on the built-in server (SslStream + PEM certs),
 static assets embedded in the binary (single-file/AOT works without wwwroot on disk) —
-**done**. Planned M4: C# → wasm island build mode, dist bundling of hydrated client code,
-distributed ISR cache.
+**done**.
+
+M4: shared/distributed SSG cache (file backend + cross-instance serving proven by
+tests), immutable content-hashed hydrate asset, `volt wasm validate` + Node
+conformance of the WASM protocol — **done**. Planned M5: C# → wasm island build
+mode, pluggable dist pipeline, cache revalidation across instances.

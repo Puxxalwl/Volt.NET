@@ -7,6 +7,10 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Volt.Core\Volt.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Template files for `volt new`; keep the tree in sync with examples/starter -->
     <EmbeddedResource Include="templates/app/**/*.cs" />
     <EmbeddedResource Include="templates/app/**/*.csproj" />
