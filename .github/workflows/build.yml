@@ -135,7 +135,8 @@ jobs:
             echo "$output" >> push-output.log
             echo "::endgroup::"
             if grep -qiE "error:|forbidden|conflict" <<<"$output"; then
-              echo "::error::push failed for ${pkg##*/}: $output"
+              encoded=$(printf '%s' "$output" | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\n/%0A/g')
+              echo "::error::push failed for ${pkg##*/}:%0A$encoded"
               exit 1
             fi
           done
