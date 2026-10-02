@@ -114,4 +114,17 @@ jobs:
           user: Puxxalwl
 
       - name: Push
-        run: dotnet nuget push 'artifacts/*.nupkg' --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: |
+          set -euo pipefail
+          # locate the nupkgs wherever the artifact got extracted
+          mapfile -t packages < <(find . -name '*.nupkg' -type f | sort)
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::no .nupkg files found after artifact download"
+            exit 1
+          fi
+          echo "Pushing ${#packages[@]} packages:"
+          printf '  %s\n' "${packages[@]}"
+          dotnet nuget push "${packages[@]}" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
