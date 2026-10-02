@@ -5,10 +5,12 @@
   <Project Path="src/Volt.Kestrel/Volt.Kestrel.csproj" />
   <Project Path="src/Volt.Server/Volt.Server.csproj" />
   <Project Path="src/Volt.Cli/Volt.Cli.csproj" />
+  <Project Path="src/Volt.Testing/Volt.Testing.csproj" />
   <Project Path="examples/starter/Starter.csproj" />
   <Project Path="apps/docs/Docs.csproj" />
   <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
   <Project Path="tests/Volt.Compiler.Tests/Volt.Compiler.Tests.csproj" />
   <Project Path="tests/Volt.E2E/Volt.E2E.csproj" />
+  <Project Path="tests/Volt.Testing.Tests/Volt.Testing.Tests.csproj" />
   <Project Path="tests/Volt.Benchmarks/Volt.Benchmarks.csproj" />
 </Solution>

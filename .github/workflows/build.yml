@@ -46,7 +46,7 @@ jobs:
             VERSION="0.0.0-dev.$(date -u +%Y%m%d%H%M%S)"
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          for p in Volt.Core Volt.Compiler Volt.Kestrel Volt.Server Volt.Hydration.JS Volt.Cli; do
+          for p in Volt.Core Volt.Compiler Volt.Kestrel Volt.Server Volt.Hydration.JS Volt.Cli Volt.Testing; do
             dotnet pack "src/$p/$p.csproj" -c Release -o artifacts -p:Version="$VERSION"
           done
         env:
