@@ -1,0 +1,15 @@
+<Project>
+  <!-- Volt folder-routing: pass Pages/*.cs to the compiler as Volt items -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/Pages')">
+    <VoltPageFile Include="Pages/**/*.cs" />
+    <AdditionalFiles Include="@(VoltPageFile)" VoltItem="Page" />
+  </ItemGroup>
+  <!-- wwwroot: available next to the binary on plain `dotnet run` too (not only publish) -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/wwwroot')">
+    <Content Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" Exclude="$(ContentRootDir)/wwwroot/**" />
+  </ItemGroup>
+  <ItemGroup>
+    <CompilerVisibleProperty Include="MSBuildProjectDirectory" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="VoltItem" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,788 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
+using System.Linq;
+using System.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+
+namespace Volt.Compiler;
+
+/// <summary>
+/// Volt source generator.
+/// 1. Folder routing: every Pages/**/*.cs becomes a route registration (route derived from the file path).
+/// 2. Islands: [VoltIsland] components get generated typed state serialization (Utf8JsonWriter/JsonDocument,
+///    reflection-free, Native AOT safe), action dispatch and fragment rendering.
+/// Registration happens via [ModuleInitializer] — no reflection at runtime.
+/// </summary>
+[Generator]
+public sealed class VoltGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        RegisterRoutesPipeline(context);
+        RegisterIslandsPipeline(context);
+    }
+
+    // ==================================================================
+    // Pipeline 1: folder routes from AdditionalFiles (VoltItem=Page)
+    // ==================================================================
+
+    private static void RegisterRoutesPipeline(IncrementalGeneratorInitializationContext context)
+    {
+        var projectDir = context.AnalyzerConfigOptionsProvider
+            .Select((options, _) => options.GlobalOptions.TryGetValue("build_property.MSBuildProjectDirectory", out var dir) ? dir : "");
+
+        var optionsProvider = context.AnalyzerConfigOptionsProvider.Select((o, _) => o);
+
+        var pages = context.AdditionalTextsProvider
+            .Combine(optionsProvider)
+            .Where(pair =>
+            {
+                var (file, provider) = pair;
+                var fileOptions = provider.GetOptions(file);
+                if (fileOptions.TryGetValue("build_metadata.AdditionalFiles.VoltItem", out var item)
+                    && item == "Page")
+                    return true;
+                // convention fallback: any AdditionalText under a Pages/ directory is a page
+                var path = file.Path.Replace('\\', '/');
+                return path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                       && path.Contains("/Pages/", StringComparison.OrdinalIgnoreCase);
+            })
+            .Combine(projectDir)
+            .Select((pair, ct) =>
+            {
+                var ((file, _), dir) = pair;
+                return PageModel.From(file.Path, file.GetText(ct)?.ToString() ?? "", dir);
+            })
+            .WithTrackingName("VoltPages")
+            .Collect();
+
+        context.RegisterSourceOutput(pages, (spc, pages) => EmitRoutes(spc, pages));
+    }
+
+    // ------------------------------------------------------------------
+    // Route model (pure data; cacheable)
+    // ------------------------------------------------------------------
+
+    private enum PageKind { Route, NotFound, Error }
+
+    private readonly record struct PageModel(
+        string FilePath,
+        string Route,
+        PageKind Kind,
+        string Namespace,
+        string TypeName,
+        string Diagnostic)
+    {
+        public static PageModel From(string filePath, string text, string projectDir)
+        {
+            var model = ParseType(filePath, text);
+            var route = RouteFromPath(filePath, projectDir, out var kind);
+            return model with { Route = route, Kind = kind };
+        }
+
+        private static PageModel ParseType(string filePath, string text)
+        {
+            try
+            {
+                var tree = CSharpSyntaxTree.ParseText(text);
+                var root = tree.GetCompilationUnitRoot();
+
+                string ns = "";
+                var nsDecl = (SyntaxNode?)root.Members.OfType<FileScopedNamespaceDeclarationSyntax>().FirstOrDefault()
+                             ?? root.Members.OfType<NamespaceDeclarationSyntax>().FirstOrDefault();
+                if (nsDecl is FileScopedNamespaceDeclarationSyntax fileNs) ns = fileNs.Name.ToString().Trim();
+                else if (nsDecl is NamespaceDeclarationSyntax blockNs) ns = blockNs.Name.ToString().Trim();
+
+                TypeDeclarationSyntax? type = null;
+                foreach (var member in root.Members)
+                {
+                    if (member is TypeDeclarationSyntax topLevelType)
+                    {
+                        type = topLevelType;
+                        break;
+                    }
+                    if (member is BaseNamespaceDeclarationSyntax nsMember)
+                    {
+                        foreach (var inner in nsMember.Members)
+                        {
+                            if (inner is TypeDeclarationSyntax innerType)
+                            {
+                                type = innerType;
+                                break;
+                            }
+                        }
+                        if (type is not null) break;
+                    }
+                }
+
+                if (type is null)
+                    return new PageModel(filePath, "", PageKind.Route, "", "", "VOLT001: no top-level type found in page file");
+
+                string baseList = "";
+                var b = type.BaseList;
+                while (b is not null)
+                {
+                    baseList = b.Types.ToString();
+                    break;
+                }
+                if (baseList.Contains("VoltPage") == false && baseList.Contains("VoltErrorPage") == false && baseList.Length > 0)
+                    return new PageModel(filePath, "", PageKind.Route, ns, type.Identifier.ValueText,
+                        "VOLT003: page types must derive from VoltPage (shared helpers belong outside Pages/)");
+
+                return new PageModel(filePath, "", PageKind.Route, ns, type.Identifier.ValueText, "");
+            }
+            catch (Exception ex)
+            {
+                return new PageModel(filePath, "", PageKind.Route, "", "", $"VOLT001: page file could not be parsed ({ex.Message})");
+            }
+        }
+
+        private static string RouteFromPath(string filePath, string projectDir, out PageKind kind)
+        {
+            kind = PageKind.Route;
+            var rel = filePath;
+            if (projectDir.Length > 0 && filePath.StartsWith(projectDir))
+                rel = filePath.Substring(projectDir.Length).TrimStart('/', '\\');
+
+            var normalized = rel.Replace('\\', '/');
+            const string pagesPrefix = "Pages/";
+            int pagesAt = normalized.IndexOf("/Pages/", StringComparison.OrdinalIgnoreCase);
+            if (pagesAt >= 0)
+                normalized = normalized.Substring(pagesAt + "/Pages/".Length); // convention: any Pages/ dir
+            else if (normalized.StartsWith(pagesPrefix, StringComparison.OrdinalIgnoreCase))
+                normalized = normalized.Substring(pagesPrefix.Length);
+
+            var dot = normalized.LastIndexOf('.');
+            if (dot >= 0) normalized = normalized.Substring(0, dot);
+
+            var segments = SplitSkipEmpty(normalized, '/');
+            if (segments.Count == 0) return "/";
+
+            var last = segments[segments.Count - 1];
+            if (segments.Count == 1 && last.Equals("notfound", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = PageKind.NotFound;
+                return "";
+            }
+            if (segments.Count == 1 && last.Equals("error", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = PageKind.Error;
+                return "";
+            }
+
+            if (last.Equals("index", StringComparison.OrdinalIgnoreCase))
+            {
+                if (segments.Count == 1) return "/";
+                segments.RemoveAt(segments.Count - 1);
+            }
+            else
+            {
+                segments[segments.Count - 1] = SegmentToRoute(last);
+            }
+
+            for (int i = 0; i < segments.Count - 1; i++)
+                segments[i] = SegmentToRoute(segments[i]);
+
+            // static segments are lowercased (About.cs -> /about); param names keep their case
+            for (int i = 0; i < segments.Count; i++)
+            {
+                if (segments[i].StartsWith("{", StringComparison.Ordinal)) continue;
+                segments[i] = segments[i].ToLowerInvariant();
+            }
+
+            return "/" + string.Join("/", segments);
+        }
+
+        private static string SegmentToRoute(string segment)
+        {
+            // [slug] → {slug}, [...rest] → {*rest}
+            if (segment.StartsWith("[...", StringComparison.Ordinal) && segment.EndsWith("]") && segment.Length > 5)
+                return "{*" + segment.Substring(4, segment.Length - 5) + "}";
+            if (segment.StartsWith("[", StringComparison.Ordinal) && segment.EndsWith("]") && segment.Length > 2)
+                return "{" + segment.Substring(1, segment.Length - 2) + "}";
+            return segment;
+        }
+
+        internal static List<string> SplitSkipEmpty(string s, char sep)
+        {
+            var result = new List<string>();
+            int start = 0;
+            for (int i = 0; i <= s.Length; i++)
+            {
+                if (i == s.Length || s[i] == sep)
+                {
+                    if (i > start) result.Add(s.Substring(start, i - start));
+                    start = i + 1;
+                }
+            }
+            return result;
+        }
+    }
+
+    private static void EmitRoutes(SourceProductionContext spc, ImmutableArray<PageModel> pages)
+    {
+        var sb = new StringBuilder(2048);
+        sb.AppendLine("// <auto-generated> Volt folder routes — do not edit");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Runtime.CompilerServices;");
+        sb.AppendLine("using Volt;");
+        sb.AppendLine();
+        sb.AppendLine("namespace Volt.Generated");
+        sb.AppendLine("{");
+        sb.AppendLine("    internal static class VoltRouteInit");
+        sb.AppendLine("    {");
+        sb.AppendLine("        [ModuleInitializer]");
+        sb.AppendLine("        internal static void Init()");
+        sb.AppendLine("        {");
+
+        var seenRoutes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var page in pages)
+        {
+            if (page.Diagnostic.Length > 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("VOLT001", "Volt page", "{0} ({1})", "Volt", DiagnosticSeverity.Error, true),
+                    Location.None, page.Diagnostic, Path.GetFileName(page.FilePath)));
+                continue;
+            }
+
+            var ctor = $"new global::{(page.Namespace.Length > 0 ? page.Namespace + "." : "")}{page.TypeName}()";
+            switch (page.Kind)
+            {
+                case PageKind.NotFound:
+                    sb.AppendLine($"            RouteRegistry.Root.SetNotFound(static () => {ctor});");
+                    break;
+                case PageKind.Error:
+                    sb.AppendLine($"            RouteRegistry.Root.SetError(static () => {ctor});");
+                    break;
+                default:
+                    if (!seenRoutes.Add(page.Route))
+                    {
+                        spc.ReportDiagnostic(Diagnostic.Create(
+                            new DiagnosticDescriptor("VOLT002", "Volt route conflict", "duplicate route '{0}' ({1})", "Volt", DiagnosticSeverity.Error, true),
+                            Location.None, page.Route, Path.GetFileName(page.FilePath)));
+                        continue;
+                    }
+                    sb.AppendLine($"            RouteRegistry.Root.Add({SymbolDisplay.FormatLiteral(page.Route, quote: true)}, static () => {ctor});");
+                    break;
+            }
+        }
+
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        spc.AddSource("VoltRoutes.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+    }
+
+    // ==================================================================
+    // Pipeline 2: islands from [VoltIsland] symbols
+    // ==================================================================
+
+    private readonly record struct ActionModel(string MethodName, string ActionName, bool HasArgs);
+
+    private enum PropKind { Int32, Int64, Boolean, Double, Single, Decimal, String, Other }
+
+    private readonly record struct PropModel(
+        string JsonName,      // camelCase json name
+        string CodeName,      // C# property/ctor-param name
+        string TypeFqn,       // global::-qualified
+        PropKind Kind,
+        bool IsNullable,
+        string? CtorParamName) // matched ctor parameter or null
+    {
+        public string EncodedFieldName => "V_" + JsonName.Replace("-", "_");
+    }
+
+    private readonly record struct IslandModel(
+        string Namespace,
+        string ClassName,
+        string StateTypeFqn,
+        string StateTypeName,
+        bool IsPartial,
+        bool IsDerivedCorrectly,
+        ImmutableArray<ActionModel> Actions,
+        ImmutableArray<PropModel> Properties,
+        bool UseCtorInit,          // true: new T(args); false: new T { props }
+        ImmutableArray<string> Diagnostics)
+    {
+        public string TypeFqn => (Namespace.Length > 0 ? Namespace + "." : "") + ClassName;
+    }
+
+    private static void RegisterIslandsPipeline(IncrementalGeneratorInitializationContext context)
+    {
+        var islands = context.SyntaxProvider.ForAttributeWithMetadataName(
+            "Volt.VoltIslandAttribute",
+            static (node, _) => node is TypeDeclarationSyntax,
+            static (ctx, _) => FromSymbol((INamedTypeSymbol)ctx.TargetSymbol, ctx.TargetNode as TypeDeclarationSyntax))
+            .WithTrackingName("VoltIslands")
+            .Collect();
+
+        context.RegisterSourceOutput(islands, (spc, islands_) => EmitIslands(spc, islands_));
+    }
+
+    private static IslandModel FromSymbol(INamedTypeSymbol symbol, TypeDeclarationSyntax? node)
+    {
+        var diagnostics = ImmutableArray.CreateBuilder<string>();
+
+        bool isPartial = node?.Modifiers.Any(SyntaxKind.PartialKeyword) ?? false;
+        if (!isPartial)
+            diagnostics.Add($"island '{symbol.Name}' must be declared partial (source generation extends it)");
+
+        if (symbol.IsGenericType)
+            diagnostics.Add($"island '{symbol.Name}' must not be generic");
+
+        INamedTypeSymbol? baseType = symbol.BaseType;
+        INamedTypeSymbol? componentBase = null;
+        while (baseType is not null)
+        {
+            var od = baseType.OriginalDefinition;
+            if (od.Arity == 1 && od.Name == "VoltComponent" && od.ContainingNamespace?.ToDisplayString() == "Volt")
+            {
+                componentBase = baseType;
+                break;
+            }
+            baseType = baseType.BaseType;
+        }
+        if (componentBase is null || componentBase.TypeArguments.Length != 1)
+        {
+            diagnostics.Add($"island '{symbol.Name}' must derive from VoltComponent<TState>");
+            return new IslandModel(
+                symbol.ContainingNamespace?.ToDisplayString() ?? "",
+                symbol.Name, "", "", isPartial, false,
+                ImmutableArray<ActionModel>.Empty, ImmutableArray<PropModel>.Empty, false,
+                diagnostics.ToImmutable());
+        }
+
+        var stateType = (INamedTypeSymbol)componentBase.TypeArguments[0];
+
+        var properties = CollectProperties(stateType, diagnostics, symbol.Name);
+        bool useCtorInit = properties.Length > 0 && properties.All(p => p.CtorParamName is not null);
+
+        var actions = ImmutableArray.CreateBuilder<ActionModel>();
+        foreach (var member in symbol.GetMembers())
+        {
+            if (member is not IMethodSymbol method) continue;
+            if (!method.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "Volt.VoltActionAttribute")) continue;
+
+            string actionName = NormalizeActionName(method.Name);
+            bool hasArgs = method.Parameters.Length == 2;
+            actions.Add(new ActionModel(method.Name, actionName, hasArgs));
+
+            if (!method.IsStatic)
+                diagnostics.Add($"action '{method.Name}' on island '{symbol.Name}' must be static");
+            if (method.ReturnType.ToDisplayString() != stateType.ToDisplayString())
+                diagnostics.Add($"action '{method.Name}' on island '{symbol.Name}' must return {stateType.Name}");
+            if (method.Parameters.Length < 1 || method.Parameters.Length > 2
+                || method.Parameters[0].Type.ToDisplayString() != stateType.ToDisplayString()
+                || (method.Parameters.Length == 2 && method.Parameters[1].Type.ToDisplayString() != "System.Text.Json.JsonElement"))
+                diagnostics.Add($"action '{method.Name}' on island '{symbol.Name}' must be (TState state) or (TState state, JsonElement args)");
+        }
+
+        return new IslandModel(
+            symbol.ContainingNamespace?.ToDisplayString() ?? "",
+            symbol.Name,
+            stateType.ToDisplayString(),
+            stateType.Name,
+            isPartial, true,
+            actions.ToImmutable(), properties, useCtorInit,
+            diagnostics.ToImmutable());
+    }
+
+    private static ImmutableArray<PropModel> CollectProperties(
+        INamedTypeSymbol stateType, ImmutableArray<string>.Builder diagnostics, string islandName)
+    {
+        var props = ImmutableArray.CreateBuilder<PropModel>();
+        foreach (var member in stateType.GetMembers())
+        {
+            if (member is not IPropertySymbol property) continue;
+            if (property.DeclaredAccessibility != Accessibility.Public) continue;
+            if (property.IsStatic) continue;
+            if (property.GetMethod is null || property.GetMethod.DeclaredAccessibility != Accessibility.Public) continue;
+            if (property.Parameters.Length > 0) continue; // indexer
+
+            var (kind, isNullable) = Classify(property.Type);
+            if (kind == PropKind.Other)
+            {
+                diagnostics.Add(
+                    $"state type '{stateType.Name}' of island '{islandName}': property '{property.Name}' has unsupported type '{property.Type.ToDisplayString()}' " +
+                    "(supported: int, long, bool, double, float, decimal, string, and their nullable forms)");
+                continue;
+            }
+            props.Add(new PropModel(
+                JsonName: ToCamelCase(property.Name),
+                CodeName: property.Name,
+                TypeFqn: property.Type.ToDisplayString().StartsWith("global::", StringComparison.Ordinal)
+                    ? property.Type.ToDisplayString()
+                    : "global::" + property.Type.ToDisplayString(),
+                Kind: kind,
+                IsNullable: isNullable,
+                CtorParamName: null));
+        }
+
+        // match ctor parameters by name (positional records)
+        bool hasParamCtor = false;
+        foreach (var ctor in stateType.InstanceConstructors)
+        {
+            if (ctor.Parameters.Length == 0) continue;
+            if (ctor.Parameters.Length != props.Count) continue;
+            bool allMatch = true;
+            foreach (var param in ctor.Parameters)
+            {
+                var propIndex = -1;
+                for (int i = 0; i < props.Count; i++)
+                {
+                    if (props[i].CodeName.Equals(param.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        propIndex = i;
+                        break;
+                    }
+                }
+                if (propIndex < 0 || !TypeMatches(props[propIndex], param.Type))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+            if (allMatch)
+            {
+                hasParamCtor = true;
+                foreach (var param in ctor.Parameters)
+                {
+                    for (int i = 0; i < props.Count; i++)
+                    {
+                        if (props[i].CodeName.Equals(param.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            props[i] = props[i] with { CtorParamName = param.Name };
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        if (!hasParamCtor && props.Count > 0)
+        {
+            // need settable/init properties for object-initializer deserialization
+            foreach (var prop in props)
+            {
+                var property = stateType.GetMembers().OfType<IPropertySymbol>()
+                    .FirstOrDefault(p => p.Name == prop.CodeName);
+                if (property is null || property.SetMethod is null || property.SetMethod.DeclaredAccessibility != Accessibility.Public)
+                {
+                    diagnostics.Add(
+                        $"state type '{stateType.Name}' of island '{islandName}': property '{prop.CodeName}' must have a public set/init " +
+                        "or match a constructor parameter (positional record)");
+                    break;
+                }
+            }
+        }
+
+        return props.ToImmutable();
+    }
+
+    private static bool TypeMatches(PropModel prop, ITypeSymbol type)
+        => type.ToDisplayString().Equals(prop.TypeFqn, StringComparison.Ordinal)
+           || ("global::" + type.ToDisplayString()).Equals(prop.TypeFqn, StringComparison.Ordinal);
+
+    private static (PropKind Kind, bool IsNullable) Classify(ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol named && named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+            && named.TypeArguments.Length == 1)
+        {
+            var (kind, _) = Classify(named.TypeArguments[0]);
+            return (kind, true);
+        }
+        return type.SpecialType switch
+        {
+            SpecialType.System_Int32 => (PropKind.Int32, false),
+            SpecialType.System_Int64 => (PropKind.Int64, false),
+            SpecialType.System_Boolean => (PropKind.Boolean, false),
+            SpecialType.System_Double => (PropKind.Double, false),
+            SpecialType.System_Single => (PropKind.Single, false),
+            SpecialType.System_Decimal => (PropKind.Decimal, false),
+            SpecialType.System_String => (PropKind.String, false),
+            _ => (PropKind.Other, false),
+        };
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        if (name.Length == 0) return name;
+        var chars = name.ToCharArray();
+        int i = 0;
+        while (i < chars.Length && char.IsUpper(chars[i])) i++;
+        if (i == 0) return name;
+        if (i == 1) { chars[0] = char.ToLowerInvariant(chars[0]); return new string(chars); }
+        if (i == chars.Length) return name.ToLowerInvariant();
+        // multiple leading capitals: lower only the first (URLStyle → urlStyle)
+        chars[0] = char.ToLowerInvariant(chars[0]);
+        return new string(chars);
+    }
+
+    private static string NormalizeActionName(string methodName)
+    {
+        var name = methodName;
+        if (name.StartsWith("On", StringComparison.Ordinal) && name.Length > 2) name = name.Substring(2);
+        if (name.EndsWith("Async", StringComparison.Ordinal) && name.Length > 5) name = name.Substring(0, name.Length - 5);
+        return name.ToLowerInvariant();
+    }
+
+    // ------------------------------------------------------------------
+    // island emission
+    // ------------------------------------------------------------------
+
+    private static void EmitIslands(SourceProductionContext spc, ImmutableArray<IslandModel> islands)
+    {
+        if (islands.Length == 0) return;
+
+        var sb = new StringBuilder(4096);
+        sb.AppendLine("// <auto-generated> Volt islands — do not edit");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Runtime.CompilerServices;");
+        sb.AppendLine("using System.Text.Json;");
+        sb.AppendLine("using Volt;");
+        sb.AppendLine();
+        sb.AppendLine("namespace Volt.Generated");
+        sb.AppendLine("{");
+        sb.AppendLine("    internal static class VoltIslandInit");
+        sb.AppendLine("    {");
+        sb.AppendLine("        [ModuleInitializer]");
+        sb.AppendLine("        internal static void Init()");
+        sb.AppendLine("        {");
+
+        int valid = 0;
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var perIsland = new List<(string ClassName, string Text)>();
+
+        foreach (var island in islands)
+        {
+            if (island.Diagnostics.Length > 0 || !island.IsDerivedCorrectly)
+            {
+                foreach (var d in island.Diagnostics)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        new DiagnosticDescriptor("VOLT010", "Volt island", "{0}", "Volt", DiagnosticSeverity.Error, true),
+                        Location.None, d));
+                }
+                continue;
+            }
+            if (!island.IsPartial) continue; // already reported
+            if (!seenNames.Add(island.ClassName))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("VOLT011", "Volt island", "duplicate island name '{0}'", "Volt", DiagnosticSeverity.Error, true),
+                    Location.None, island.ClassName));
+                continue;
+            }
+
+            valid++;
+            string fqn = "global::" + island.TypeFqn;
+            string stateFqn = island.StateTypeFqn.StartsWith("global::", StringComparison.Ordinal)
+                ? island.StateTypeFqn
+                : "global::" + island.StateTypeFqn;
+            string safeName = SafeContextName(island.TypeFqn);
+
+            // registration (into the single Init method)
+            sb.AppendLine($"            VoltIslandRegistry.Root.Register(new VoltIslandEntry");
+            sb.AppendLine($"            {{");
+            sb.AppendLine($"                Name = {SymbolDisplay.FormatLiteral(island.ClassName, quote: true)},");
+            sb.AppendLine($"                Dispatch = static (stateJson, action, argsJson) => VoltIslands_{safeName}.Dispatch(stateJson, action, argsJson),");
+            sb.AppendLine($"                Render = static (stateJson, sid, token) => VoltIslands_{safeName}.Render(stateJson, sid, token),");
+            sb.AppendLine($"            }});");
+
+            // dispatch + fragment render + partial impl, one file per island
+            perIsland.Add((safeName, EmitIslandCode(island, fqn, stateFqn, safeName)));
+        }
+
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+
+        if (valid > 0)
+        {
+            spc.AddSource("VoltIslands.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+            foreach (var (name, text) in perIsland)
+            {
+                spc.AddSource($"VoltIslands_{name}.g.cs", SourceText.From(text, Encoding.UTF8));
+            }
+        }
+    }
+
+    private static string SafeContextName(string typeFqn)
+    {
+        var sb = new StringBuilder(typeFqn.Length);
+        foreach (char c in typeFqn)
+        {
+            if (char.IsLetterOrDigit(c) || c == '_') sb.Append(c);
+            else if (c == '.' || c == '+') sb.Append('_');
+            // generic commas/angle brackets dropped
+        }
+        return sb.ToString();
+    }
+
+    private static string EmitIslandCode(IslandModel island, string fqn, string stateFqn, string safeName)
+    {
+        var sb = new StringBuilder(2048);
+        sb.AppendLine("// <auto-generated> Volt island — do not edit");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Buffers;");
+        sb.AppendLine("using System.Text.Json;");
+        sb.AppendLine("using Volt;");
+        sb.AppendLine();
+        sb.AppendLine("namespace Volt.Generated");
+        sb.AppendLine("{");
+        sb.AppendLine($"    internal static class VoltIslands_{safeName}");
+        sb.AppendLine("    {");
+        sb.AppendLine("        public static byte[] Dispatch(ReadOnlySpan<byte> stateJson, string action, ReadOnlySpan<byte> argsJson)");
+        sb.AppendLine("        {");
+        if (island.Actions.Length == 0)
+        {
+            sb.AppendLine($"            throw new VoltActionNotFoundException({SymbolDisplay.FormatLiteral(island.ClassName, quote: true)}, action);");
+        }
+        else
+        {
+            sb.AppendLine("            switch (action)");
+            sb.AppendLine("            {");
+            foreach (var act in island.Actions)
+            {
+                sb.AppendLine($"                case {SymbolDisplay.FormatLiteral(act.ActionName, quote: true)}:");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    var state = {fqn}.DeserializeState(stateJson);");
+                if (act.HasArgs)
+                    sb.AppendLine("                    var args = JsonDocument.Parse(new ReadOnlySequence<byte>(argsJson.ToArray())).RootElement;");
+                sb.AppendLine($"                    return {fqn}.SerializeState({fqn}.{act.MethodName}(state{(act.HasArgs ? ", args" : "")}));");
+                sb.AppendLine("                }");
+            }
+            sb.AppendLine("                default:");
+            sb.AppendLine($"                    throw new VoltActionNotFoundException({SymbolDisplay.FormatLiteral(island.ClassName, quote: true)}, action);");
+            sb.AppendLine("            }");
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        public static VoltFragment Render(ReadOnlySpan<byte> stateJson, string sid, string? token)");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            var state = {fqn}.DeserializeState(stateJson);");
+        sb.AppendLine("            var fragment = new VoltFragment();");
+        sb.AppendLine("            var w = fragment.Writer;");
+        sb.AppendLine("            var ctx = RenderContext.ForFragment();");
+        sb.AppendLine("            ctx.FallbackStore = VoltRuntime.FallbackStore;");
+        sb.AppendLine("            ctx.FallbackToken = token;");
+        sb.AppendLine($"            w.Island<{fqn}, {stateFqn}>(state, ctx, sid);");
+        sb.AppendLine("            return fragment;");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine($"namespace {(island.Namespace.Length > 0 ? island.Namespace : "global")}");
+        sb.AppendLine("{");
+        // nested classes: re-emit containing declarations
+        sb.AppendLine($"    partial class {NestedClassName(island.Namespace, island.TypeFqn)} : IVoltIsland<{stateFqn}>");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        public static string IslandName => {SymbolDisplay.FormatLiteral(island.ClassName, quote: true)};");
+
+        // ---- serialize ----
+        foreach (var prop in island.Properties)
+        {
+            sb.AppendLine($"        private static readonly JsonEncodedText {prop.EncodedFieldName} = JsonEncodedText.Encode({SymbolDisplay.FormatLiteral(prop.JsonName, quote: true)});");
+        }
+        sb.AppendLine($"        public static byte[] SerializeState({stateFqn} state)");
+        sb.AppendLine("        {");
+        if (island.Properties.Length == 0)
+        {
+            sb.AppendLine("            return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(state);");
+        }
+        else
+        {
+            sb.AppendLine("            var buffer = new Volt.PooledBufferWriter();");
+            sb.AppendLine("            using (var writer = new System.Text.Json.Utf8JsonWriter(buffer))");
+            sb.AppendLine("            {");
+            sb.AppendLine("                writer.WriteStartObject();");
+            foreach (var prop in island.Properties)
+            {
+                string value = $"state.{prop.CodeName}";
+                if (prop.IsNullable && prop.Kind != PropKind.String)
+                    sb.AppendLine($"                if ({value} is not null) writer.Write{WriteMethod(prop)}({prop.EncodedFieldName}, {value}.Value);");
+                else
+                    sb.AppendLine($"                writer.Write{WriteMethod(prop)}({prop.EncodedFieldName}, {value});");
+            }
+            sb.AppendLine("                writer.WriteEndObject();");
+            sb.AppendLine("                writer.Flush();");
+            sb.AppendLine("            }");
+            sb.AppendLine("            return buffer.WrittenSpan.ToArray();");
+        }
+        sb.AppendLine("        }");
+
+        // ---- deserialize ----
+        sb.AppendLine($"        public static {stateFqn} DeserializeState(ReadOnlySpan<byte> utf8Json)");
+        sb.AppendLine("        {");
+        if (island.Properties.Length == 0)
+        {
+            sb.AppendLine($"            return System.Text.Json.JsonSerializer.Deserialize<{stateFqn}>(new ReadOnlySequence<byte>(utf8Json.ToArray())) ?? throw new System.Text.Json.JsonException(\"Volt: null state\");");
+        }
+        else
+        {
+            sb.AppendLine("            using var document = System.Text.Json.JsonDocument.Parse(new ReadOnlySequence<byte>(utf8Json.ToArray()));");
+            sb.AppendLine("            var root = document.RootElement;");
+            foreach (var prop in island.Properties)
+            {
+                var method = ReadMethod(prop);
+                if (prop.IsNullable || prop.Kind == PropKind.String)
+                    sb.AppendLine($"            var p_{prop.CodeName} = root.TryGetProperty({SymbolDisplay.FormatLiteral(prop.JsonName, quote: true)}, out var p_{prop.CodeName}El) && p_{prop.CodeName}El.ValueKind != System.Text.Json.JsonValueKind.Null ? p_{prop.CodeName}El.{method} : null;");
+                else
+                    sb.AppendLine($"            var p_{prop.CodeName} = root.GetProperty({SymbolDisplay.FormatLiteral(prop.JsonName, quote: true)}).{method};");
+            }
+            if (island.UseCtorInit)
+            {
+                var args = string.Join(", ", island.Properties.Select(p => "p_" + p.CodeName + (p.IsNullable && p.Kind != PropKind.String ? "!.Value" : "")));
+                sb.AppendLine($"            return new {stateFqn}({args});");
+            }
+            else
+            {
+                var inits = string.Join(", ", island.Properties.Select(p =>
+                    $"{{ {p.CodeName} = p_{p.CodeName}" + (p.IsNullable && p.Kind != PropKind.String ? " ?? default" : "") + " }}"));
+                sb.AppendLine($"            return new {stateFqn} {string.Join(" ", inits)};");
+            }
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
+
+    private static string NestedClassName(string ns, string typeFqn)
+    {
+        // strip "Namespace." prefix → possibly nested "Outer.Inner"
+        var rel = typeFqn;
+        if (ns.Length > 0 && rel.StartsWith(ns + ".", StringComparison.Ordinal))
+            rel = rel.Substring(ns.Length + 1);
+        return rel.Replace(".", ".");
+    }
+
+    private static string WriteMethod(PropModel prop) => prop.Kind switch
+    {
+        PropKind.Int32 or PropKind.Int64 or PropKind.Double or PropKind.Single or PropKind.Decimal => "Number",
+        PropKind.Boolean => "Boolean",
+        PropKind.String => "String",
+        _ => "String",
+    };
+
+    private static string ReadMethod(PropModel prop) => prop.Kind switch
+    {
+        PropKind.Int32 => "GetInt32()",
+        PropKind.Int64 => "GetInt64()",
+        PropKind.Boolean => "GetBoolean()",
+        PropKind.Double => "GetDouble()",
+        PropKind.Single => "GetSingle()",
+        PropKind.Decimal => "GetDecimal()",
+        _ => "GetString()",
+    };
+}

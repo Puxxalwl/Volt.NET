@@ -1,0 +1,15 @@
+bin/
+obj/
+dist/
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/
+*.binlog
+artifacts/
+.nuget/
+BenchmarkDotNet.Artifacts/
+.probe*
+*.log
+/tmp/

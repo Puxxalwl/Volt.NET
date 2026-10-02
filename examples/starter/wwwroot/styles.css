@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
+h1 { font-size: 1.6rem; }
+.counter { display: flex; gap: 1rem; align-items: center; padding: 1rem; border: 1px solid #8884; border-radius: 8px; }
+.count { font-variant-numeric: tabular-nums; font-weight: 600; }
+button { padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; }
+pre { overflow: auto; }

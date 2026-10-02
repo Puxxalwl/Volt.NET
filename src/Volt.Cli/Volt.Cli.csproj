@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Volt.Cli</RootNamespace>
+    <AssemblyName>volt</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Template files for `volt new`; keep the tree in sync with examples/starter -->
+    <EmbeddedResource Include="templates/app/**/*.cs" />
+    <EmbeddedResource Include="templates/app/**/*.csproj" />
+    <EmbeddedResource Include="templates/app/**/*.css" />
+    <EmbeddedResource Include="templates/app/**/*.md" />
+  </ItemGroup>
+</Project>
