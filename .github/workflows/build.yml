@@ -1,0 +1,117 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: build + test + pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.100-preview.5.26302.115'
+
+      - name: Build
+        run: dotnet build Volt.slnx -c Release
+        env:
+          DOTNET_ROLL_FORWARD: Major
+
+      - name: Test (unit + compiler + E2E on both transports)
+        run: dotnet test Volt.slnx -c Release --no-build
+        env:
+          DOTNET_ROLL_FORWARD: Major
+
+      - name: Pack
+        run: |
+          set -euo pipefail
+          # version: tag v0.4.0 → 0.4.0; CI builds get a timestamped dev version
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev.$(date -u +%Y%m%d%H%M%S)"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          for p in Volt.Core Volt.Compiler Volt.Kestrel Volt.Server Volt.Hydration.JS Volt.Cli; do
+            dotnet pack "src/$p/$p.csproj" -c Release -o artifacts -p:Version="$VERSION"
+          done
+        env:
+          DOTNET_ROLL_FORWARD: Major
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+
+      - name: Smoke-test the packages like a consumer
+        # consumes the nupkgs from a local feed — validates the analyzer package,
+        # the auto-imported props and the hydrate.js dependency flow
+        run: |
+          set -euo pipefail
+          mkdir -p ~/smoke/VoltConsumer && cd ~/smoke/VoltConsumer
+          cat > VoltConsumer.csproj <<'CS'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <Nullable>enable</Nullable>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Volt.Server" Version="$VERSION" />
+              <PackageReference Include="Volt.Compiler" Version="$VERSION" PrivateAssets="all"
+                                OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+            </ItemGroup>
+          </Project>
+          CS
+          sed -i "s/\$VERSION/$VERSION/g" VoltConsumer.csproj
+          mkdir -p Pages wwwroot
+          printf '@page /\n@mode SSG\n\n<h1>smoke</h1>\n' > Pages/Index.volt
+          printf 'body { margin: 0 }\n' > wwwroot/app.css
+          printf 'using Volt;\nusing Volt.Server;\n\nreturn VoltServerApp.Run(args);\n' > Program.cs
+          dotnet nuget add source "$GITHUB_WORKSPACE/artifacts" -n local
+          DOTNET_ROLL_FORWARD=Major dotnet build -c Release
+        env:
+          DOTNET_ROLL_FORWARD: Major
+
+  publish:
+    name: publish to nuget.org (trusted publishing)
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # must match the trusted publishing policy registered on nuget.org
+    environment: prod
+    permissions:
+      id-token: write  # GitHub OIDC token for NuGet trusted publishing
+      contents: read
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: artifacts
+
+      - name: NuGet login (OIDC → temporary API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: Puxxalwl
+
+      - name: Push
+        run: dotnet nuget push 'artifacts/*.nupkg' --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

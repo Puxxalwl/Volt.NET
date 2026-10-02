@@ -5,8 +5,19 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <IsRoslynComponent>true</IsRoslynComponent>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
-    <IsPublishable>false</IsPublishable>
+    <IsPublishable>true</IsPublishable>
+    <IsPackable>true</IsPackable>
+    <PackageId>Volt.Compiler</PackageId>
+    <Description>Volt.NET source generator: folder routing, island registration and the .volt Razor-like template compiler. Reference as an analyzer (see README).</Description>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- the generator runs inside the consuming compiler: ship it as an analyzer -->
+    <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs/" />
+    <!-- props auto-imported by NuGet for projects referencing this package -->
+    <None Include="build/**" Pack="true" PackagePath="build/" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.Common" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />

@@ -5,6 +5,12 @@
     <RootNamespace>Volt.Cli</RootNamespace>
     <AssemblyName>volt</AssemblyName>
     <IsAotCompatible>true</IsAotCompatible>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>volt</ToolCommandName>
+    <PackageId>Volt.Cli</PackageId>
+    <PackageTags>web;framework;ssg;cli;tool</PackageTags>
+    <Description>Volt.NET CLI: `volt new` scaffolding, dev server, AOT build, export, `volt wasm validate`. Install: dotnet tool install --global Volt.Cli</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Volt.Core\Volt.Core.csproj" />

@@ -4,5 +4,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <RootNamespace>Volt</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Volt.Core</PackageId>
+    <Description>Volt.NET runtime: zero-allocation HTML rendering, SSG/SSR/ISR engine, routing, islands, SEO, hydration runtime.</Description>
   </PropertyGroup>
 </Project>

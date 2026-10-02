@@ -6,4 +6,22 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <NoWarn>$(NoWarn);NETSDK1057</NoWarn>
   </PropertyGroup>
+
+  <!-- Shared NuGet package metadata (packable projects opt in via <IsPackable>true</IsPackable>) -->
+  <PropertyGroup>
+    <Authors>Puxxalwl</Authors>
+    <Copyright>Copyright Puxxalwl</Copyright>
+    <RepositoryUrl>https://github.com/Puxxalwl/Volt.NET</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/Puxxalwl/Volt.NET</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>web;framework;ssg;ssr;islands;hydration;aot;source-generator;razor;html</PackageTags>
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+  </PropertyGroup>
+
+  <!-- Root README rides along into every package (NuGet listing page) -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

@@ -3,6 +3,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsAotCompatible>true</IsAotCompatible>
     <RootNamespace>Volt</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Volt.Kestrel</PackageId>
+    <Description>Volt.NET Kestrel transport: the shared VoltEngine pipeline hosted on ASP.NET Core (TLS, HTTP/2/3, the ASP.NET ecosystem).</Description>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

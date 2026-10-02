@@ -3,6 +3,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsAotCompatible>true</IsAotCompatible>
     <RootNamespace>Volt.Hydration</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Volt.Hydration.JS</PackageId>
+    <Description>Volt.NET hydration runtime payload: the ~11KB dependency-free hydrate.js (island dispatch, no-JS fallback, client router, WASM islands).</Description>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="wwwroot/hydrate.js" />

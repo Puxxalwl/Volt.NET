@@ -28,8 +28,8 @@ internal static class AppTemplate
             <PublishAot>true</PublishAot>
           </PropertyGroup>
           <ItemGroup>
-            <PackageReference Include="Volt.Kestrel" Version="1.0.0" />
-            <PackageReference Include="Volt.Compiler" Version="1.0.0" PrivateAssets="all"
+            <PackageReference Include="Volt.Kestrel" Version="*" />
+            <PackageReference Include="Volt.Compiler" Version="*" PrivateAssets="all"
                               OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
           </ItemGroup>
         </Project>

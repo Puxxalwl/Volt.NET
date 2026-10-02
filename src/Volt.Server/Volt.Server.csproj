@@ -4,6 +4,9 @@
     <IsAotCompatible>true</IsAotCompatible>
     <RootNamespace>Volt</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Volt.Server</PackageId>
+    <Description>Volt.NET built-in zero-allocation HTTP/1.1 server (keep-alive, pipelining, TLS via SslStream, +58% throughput vs the Kestrel bridge).</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Volt.Core\Volt.Core.csproj" />

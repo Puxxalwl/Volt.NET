@@ -1,21 +1,19 @@
 <Project>
-  <!-- Volt folder-routing: pass Pages/*.cs to the compiler as Volt items -->
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/Pages')">
+  <!-- Imported for projects referencing the Volt.Compiler package (NuGet build/
+       folder, automatic) and manually by in-repo consumers (ProjectReference). -->
+  <ItemGroup>
+    <!-- Volt folder routing: pass Pages/*.cs and Pages/**/*.volt to the generator -->
     <VoltPageFile Include="Pages/**/*.cs" />
     <AdditionalFiles Include="@(VoltPageFile)" VoltItem="Page" />
     <VoltTemplateFile Include="Pages/**/*.volt" />
     <AdditionalFiles Include="@(VoltTemplateFile)" VoltItem="VoltTemplate" />
-  </ItemGroup>
-  <!-- wwwroot: available next to the binary on plain `dotnet run` too (not only publish) -->
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/wwwroot')">
+    <!-- wwwroot: available next to the binary on plain `dotnet run` too (not only publish) -->
     <Content Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" Exclude="$(ContentRootDir)/wwwroot/**" />
     <!-- M3: also embed into the assembly — single-file/AOT binaries serve assets
          from memory when the wwwroot directory is absent -->
     <EmbeddedResource Include="wwwroot/**">
       <LogicalName>volt.static.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
-  </ItemGroup>
-  <ItemGroup>
     <CompilerVisibleProperty Include="MSBuildProjectDirectory" />
     <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="VoltItem" />
   </ItemGroup>

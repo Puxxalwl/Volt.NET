@@ -242,12 +242,42 @@ volt export [path] [--out DIR] [--base-url U]  static export to dist/
 volt serve [path] [--port N] run without watch
 ```
 
+## Install from NuGet
+
+Published automatically by [build.yml](.github/workflows/build.yml) via **NuGet
+trusted publishing** (OIDC, no API keys): push a tag `v0.4.0` → all packages
+versioned `0.4.0` land on nuget.org.
+
+```bash
+# scaffold (CLI as a dotnet global tool)
+dotnet tool install --global Volt.Cli
+volt new mysite && cd mysite && dotnet run
+```
+
+Or wire an existing console app:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Volt.Server" Version="*" />
+  <!-- the source generator + .volt compiler: reference as an analyzer -->
+  <PackageReference Include="Volt.Compiler" Version="*" PrivateAssets="all"
+                    OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+</ItemGroup>
+```
+
+Packages: `Volt.Server` (built-in zero-alloc HTTP/1.1 server) · `Volt.Kestrel`
+(Kestrel bridge) · `Volt.Core` (engine/runtime) · `Volt.Compiler` (source
+generator, analyzer package) · `Volt.Hydration.JS` (hydrate.js payload) ·
+`Volt.Cli` (`volt` tool). All MIT.
+
 ## Getting started (repo)
 
 ```bash
 dotnet build                          # builds everything
 DOTNET_ROLL_FORWARD=Major dotnet run --project examples/starter   # serve the demo
 DOTNET_ROLL_FORWARD=Major dotnet test # 123 tests: unit + compiler + E2E (both transports)
+# CI (.github/workflows/build.yml): build + test + pack + consumer smoke on every push;
+# pushing a v* tag publishes all packages to nuget.org via trusted publishing
 dotnet run -c Release --project tests/Volt.Benchmarks              # benchmarks
 ```
 
