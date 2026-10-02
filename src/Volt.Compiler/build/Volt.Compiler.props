@@ -9,6 +9,11 @@
   <!-- wwwroot: available next to the binary on plain `dotnet run` too (not only publish) -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/wwwroot')">
     <Content Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" Exclude="$(ContentRootDir)/wwwroot/**" />
+    <!-- M3: also embed into the assembly — single-file/AOT binaries serve assets
+         from memory when the wwwroot directory is absent -->
+    <EmbeddedResource Include="wwwroot/**">
+      <LogicalName>volt.static.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <CompilerVisibleProperty Include="MSBuildProjectDirectory" />

@@ -22,6 +22,10 @@ public abstract class VoltComponent<TState> : VoltComponent
 public interface IVoltIsland<TState>
 {
     static abstract string IslandName { get; }
+
+    /// <summary>WASM module URL for client-side dispatch, or null for server actions.</summary>
+    static abstract string? WasmModule { get; }
+
     static abstract byte[] SerializeState(TState state);
     static abstract TState DeserializeState(ReadOnlySpan<byte> utf8Json);
 }
@@ -33,6 +37,12 @@ public interface IVoltIsland<TState>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class VoltIslandAttribute : Attribute
 {
+    /// <summary>
+    /// OPTIONAL (M3, experimental): URL of a WebAssembly module that dispatches this
+    /// island's actions CLIENT-SIDE (no /_volt/action round-trip). See CONTRACT.md
+    /// for the required module exports.
+    /// </summary>
+    public string? Wasm { get; set; }
 }
 
 /// <summary>

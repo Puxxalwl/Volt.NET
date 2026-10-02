@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Volt;
 
 /// <summary>Island rendering entry point (see CONTRACT.md for the emitted markup).</summary>
@@ -33,8 +35,44 @@ public static class HtmlWriterIslands
                 w.Attr("data-v"u8, name);
                 w.Attr("data-sid"u8, sid);
                 w.Attr("data-props"u8, stateJson);
+                if (TComponent.WasmModule is { Length: > 0 } wasmUrl)
+                    w.Attr("data-v-wasm"u8, wasmUrl);
                 new TComponent { State = TComponent.DeserializeState(stateJson) }.Render(w, ctx);
             }
+        }
+
+        w.EnsureHydrationScript();
+    }
+
+    /// <summary>
+    /// Renders an island by NAME through the runtime registry (the .volt template path):
+    /// the state is the CONTRACT wire-format JSON. Emits the same form + volt-island
+    /// markup and the hydration script as the typed overload.
+    /// </summary>
+    public static void IslandByName(
+        this HtmlWriter w, string name, ReadOnlySpan<char> stateJson, RenderContext ctx, string? sid = null)
+    {
+        var entry = VoltRuntime.Islands.Find(name)
+            ?? throw new InvalidOperationException(
+                $"Volt: island '{name}' is not registered — check the [VoltIsland] component name.");
+        sid ??= ctx.NextSid();
+
+        // A live fallback token overrides the template state (no-JS form flow).
+        byte[] stateBytes;
+        if (ctx.TryGetFallbackState(name, sid) is { } overrideState)
+        {
+            stateBytes = overrideState;
+        }
+        else
+        {
+            stateBytes = new byte[Encoding.UTF8.GetMaxByteCount(stateJson.Length)];
+            int written = Encoding.UTF8.GetBytes(stateJson, stateBytes);
+            if (written < stateBytes.Length) stateBytes = stateBytes[..written];
+        }
+
+        using (var fragment = entry.Render(stateBytes, sid, ctx.FallbackToken))
+        {
+            w.RawUtf8(fragment.Html);
         }
 
         w.EnsureHydrationScript();

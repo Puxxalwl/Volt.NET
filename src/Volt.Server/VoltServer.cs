@@ -1,6 +1,8 @@
 using System.Net;
 using System.Collections.Concurrent;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Volt.Server;
 
@@ -13,10 +15,17 @@ public sealed class VoltServer : IDisposable
     private readonly Socket _listener = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
     private readonly ConcurrentQueue<VoltConnection> _pool = new();
     private readonly VoltOptions _options;
+    private readonly X509Certificate2? _tlsCertificate;
     private Task? _acceptLoop;
     private int _started;
 
-    public VoltServer(VoltOptions options) => _options = options;
+    public VoltServer(VoltOptions options, X509Certificate2? tlsCertificate = null)
+    {
+        _options = options;
+        _tlsCertificate = tlsCertificate;
+    }
+
+    public bool IsTls => _tlsCertificate is not null;
 
     /// <summary>Binds and starts accepting. Idempotent.</summary>
     public void Start(IPEndPoint endpoint)
@@ -42,8 +51,28 @@ public sealed class VoltServer : IDisposable
             catch (SocketException) { continue; }
             catch (ObjectDisposedException) { break; }
 
-            var connection = Rent();
-            _ = Task.Run(() => connection.RunAsync(socket));
+            if (_tlsCertificate is not null)
+            {
+                var tlsStream = new SslStream(new NetworkStream(socket, ownsSocket: false), false);
+                try
+                {
+                    await tlsStream.AuthenticateAsServerAsync(_tlsCertificate, clientCertificateRequired: false,
+                        enabledSslProtocols: System.Security.Authentication.SslProtocols.None, checkCertificateRevocation: false);
+                }
+                catch
+                {
+                    tlsStream.Dispose();
+                    socket.Dispose();
+                    continue;
+                }
+                var tlsConnection = Rent();
+                _ = Task.Run(() => tlsConnection.RunAsync(socket, tlsStream));
+            }
+            else
+            {
+                var connection = Rent();
+                _ = Task.Run(() => connection.RunAsync(socket, new NetworkStream(socket, ownsSocket: false)));
+            }
         }
     }
 

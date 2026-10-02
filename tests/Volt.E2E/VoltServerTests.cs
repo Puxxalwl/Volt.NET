@@ -194,6 +194,34 @@ public sealed class VoltServerTests : IClassFixture<ServerFixture>
     }
 
     [Fact]
+    public async Task WasmIsland_MarkupCarriesWasmModuleUrlOnCustomServer()
+    {
+        using var http2 = new HttpClient();
+        var html = await http2.GetStringAsync(_fx.Url + "/wasm-isle");
+        Assert.Contains("data-v-wasm=\"/islands/calc.wasm\"", html);
+        Assert.Contains("data-props=\"{&quot;value&quot;:7}\"", html);
+    }
+
+    [Fact]
+    public void EmbeddedStaticAssets_AreDiscoverableInAssembly()
+    {
+        // the E2E project embeds wwwroot/** as volt.static.* resources (M3 bundling)
+        var names = VoltStaticAssets.ListEmbedded(typeof(VoltServerTests).Assembly);
+        Assert.Contains("/test.css", names);
+    }
+
+    [Fact]
+    public async Task VoltIslandNode_InTemplatePage_RendersOnCustomServer()
+    {
+        using var http2 = new HttpClient();
+        var html = await http2.GetStringAsync(_fx.Url + "/volt-isle");
+        Assert.Contains("<volt-island", html);
+        Assert.Contains("data-v=\"Todo\"", html);
+        Assert.Contains("wire state #2", html);
+        Assert.Contains("hydrate.js", html);
+    }
+
+    [Fact]
     public async Task MalformedRequestLine_ClosesConnectionWith400()
     {
         using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
@@ -229,6 +257,65 @@ public sealed class ServerFixture : IAsyncLifetime
             DevMode = true,
             BaseUrl = "http://127.0.0.1",
         });
+    }
+
+    public Task DisposeAsync()
+    {
+        _handle?.Dispose();
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>TLS on the built-in server: self-signed cert + https request round-trip.</summary>
+public sealed class VoltServerTlsTests : IClassFixture<TlsFixture>
+{
+    private readonly TlsFixture _fx;
+    public VoltServerTlsTests(TlsFixture fx) => _fx = fx;
+
+    [Fact]
+    public async Task Https_ServesPagesOverTls()
+    {
+        using var handler = new SocketsHttpHandler
+        {
+            SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true, // self-signed test cert
+            },
+        };
+        using var http = new HttpClient(handler);
+        using var res = await http.GetAsync(_fx.Url + "/about");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("About", html);
+    }
+
+    [Fact]
+    public async Task Https_HydrateJs_StillServed()
+    {
+        using var handler = new SocketsHttpHandler
+        {
+            SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true,
+            },
+        };
+        using var http = new HttpClient(handler);
+        using var res = await http.GetAsync(_fx.Url + "/_volt/hydrate.js");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("text/javascript; charset=utf-8", res.Content.Headers.ContentType?.ToString());
+    }
+}
+
+public sealed class TlsFixture : IAsyncLifetime
+{
+    public string Url { get; private set; } = "";
+    private VoltServerHandle? _handle;
+
+    public async Task InitializeAsync()
+    {
+        var certificate = VoltServerApp.CreateSelfSignedCertificate();
+        (Url, _handle) = await VoltServerApp.StartTestServerAsync(
+            new VoltOptions { DevMode = true, BaseUrl = "https://127.0.0.1" }, certificate);
     }
 
     public Task DisposeAsync()

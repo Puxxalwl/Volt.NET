@@ -26,6 +26,10 @@
     @for (int i = 1; i <= 3; i++) {
     <li>Sample item @(i) — rendered live by the loop above</li>
     }
+
+    <h2>Islands in markup</h2>
+    <pre>&lt;volt-island name="Counter" state='{"count":0}' /&gt;</pre>
+    <p>Embeds an interactive island by registry name with wire-format JSON state — the full form, fallback and hydration markup is emitted for you. A component declared with <code>@@[VoltIsland(Wasm = "…")]</code> adds <code>data-v-wasm</code> and dispatches actions client-side (see CONTRACT.md).</p>
     <p>This very page is a .volt file — check <code>apps/docs/Pages/Templates.volt</code>.</p>
 </body>
 </html>

@@ -19,6 +19,7 @@ internal sealed class VoltConnection : IDisposable
     private static readonly byte[] ContinueBytes = "HTTP/1.1 100 Continue\r\n\r\n"u8.ToArray();
 
     private Socket _socket = null!;
+    private Stream _stream = null!;
     private byte[] _recvBuffer = null!;
     private int _recvLength;
     private readonly HeaderPosition[] _positions = new HeaderPosition[96];
@@ -37,18 +38,19 @@ internal sealed class VoltConnection : IDisposable
         _headerSource = new HeaderSource(this);
     }
 
-    private void Attach(Socket socket)
+    private void Attach(Socket socket, Stream stream)
     {
         _socket = socket;
+        _stream = stream;
         _recvBuffer ??= ArrayPool<byte>.Shared.Rent(RecvBufferInitial);
         _recvLength = 0;
         _headerCount = 0;
         _vctx.Reset();
     }
 
-    public async Task RunAsync(Socket socket)
+    public async Task RunAsync(Socket socket, Stream stream)
     {
-        Attach(socket);
+        Attach(socket, stream);
         try
         {
             socket.NoDelay = true;
@@ -82,7 +84,7 @@ internal sealed class VoltConnection : IDisposable
         {
             if (_recvLength >= MaxHeadBytes) { await SendSimpleAsync(431, "Request Header Fields Too Large"); return false; }
             if (_recvLength == _recvBuffer.Length) GrowRecvBuffer(_recvLength + 1);
-            int n = await _socket.ReceiveAsync(_recvBuffer.AsMemory(_recvLength), SocketFlags.None);
+            int n = await _stream.ReadAsync(_recvBuffer.AsMemory(_recvLength));
             if (n == 0) return false; // peer closed
             _recvLength += n;
             headEnd = Http1.FindHeadEnd(_recvBuffer.AsSpan(0, _recvLength));
@@ -101,7 +103,7 @@ internal sealed class VoltConnection : IDisposable
         if (parsed.ContentLength > MaxBodyBytes) { await SendSimpleAsync(413, "Payload Too Large"); return false; }
         if (parsed.ContentLength > 0 && parsed.Expect100)
         {
-            await _socket.SendAsync(ContinueBytes, SocketFlags.None);
+            await _stream.WriteAsync(ContinueBytes);
         }
         int bodyStart = headEnd;
         if (parsed.ContentLength > 0)
@@ -110,7 +112,7 @@ internal sealed class VoltConnection : IDisposable
             while (_recvLength < totalNeeded)
             {
                 if (totalNeeded > _recvBuffer.Length) GrowRecvBuffer((int)totalNeeded);
-                int n = await _socket.ReceiveAsync(_recvBuffer.AsMemory(_recvLength), SocketFlags.None);
+                int n = await _stream.ReadAsync(_recvBuffer.AsMemory(_recvLength));
                 if (n == 0) return false;
                 _recvLength += n;
             }
@@ -205,11 +207,11 @@ internal sealed class VoltConnection : IDisposable
         terminator[1] = (byte)'\n';
         _headers.Advance(2);
 
-        await _socket.SendAsync(_headers.WrittenMemory, SocketFlags.None);
+        await _stream.WriteAsync(_headers.WrittenMemory);
 
         if (!isHead && _vctx.HasBody)
         {
-            await _socket.SendAsync(_body.WrittenMemory, SocketFlags.None);
+            await _stream.WriteAsync(_body.WrittenMemory);
         }
         _body.Reset();
     }
@@ -306,7 +308,7 @@ internal sealed class VoltConnection : IDisposable
         "Content-Length: 0\r\nConnection: close\r\n\r\n"u8.CopyTo(span[pos..]);
         pos += "Content-Length: 0\r\nConnection: close\r\n\r\n"u8.Length;
         _headers.Advance(pos);
-        try { await _socket.SendAsync(_headers.WrittenMemory, SocketFlags.None); }
+        try { await _stream.WriteAsync(_headers.WrittenMemory); }
         catch (SocketException) { }
     }
 
@@ -315,14 +317,14 @@ internal sealed class VoltConnection : IDisposable
         try
         {
             if (_socket.Connected)
-                _socket.SendAsync(bytes.ToArray(), SocketFlags.None).GetAwaiter().GetResult();
+                _stream.Write(bytes.ToArray());
         }
         catch { }
     }
 
     private void CloseSocket()
     {
-        try { _socket.Shutdown(SocketShutdown.Both); } catch { }
+        try { _stream.Dispose(); } catch { }
         try { _socket.Dispose(); } catch { }
     }
 

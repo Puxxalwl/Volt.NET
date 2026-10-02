@@ -31,6 +31,9 @@ public sealed class VoltIslandEntry
     public required string Name { get; init; }
     public required IslandDispatch Dispatch { get; init; }
     public required IslandRenderFragment Render { get; init; }
+
+    /// <summary>WASM module URL for client-side dispatch (null = server actions).</summary>
+    public string? WasmModule { get; init; }
 }
 
 /// <summary>Island table filled at startup by generated code; looked up by island name.</summary>

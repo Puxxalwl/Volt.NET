@@ -398,6 +398,7 @@ public sealed class VoltGenerator : IIncrementalGenerator
         ImmutableArray<ActionModel> Actions,
         ImmutableArray<PropModel> Properties,
         bool UseCtorInit,          // true: new T(args); false: new T { props }
+        string? Wasm,              // [VoltIsland(Wasm = "…")] — client-side dispatch module URL
         ImmutableArray<string> Diagnostics)
     {
         public string TypeFqn => (Namespace.Length > 0 ? Namespace + "." : "") + ClassName;
@@ -444,11 +445,22 @@ public sealed class VoltGenerator : IIncrementalGenerator
             return new IslandModel(
                 symbol.ContainingNamespace?.ToDisplayString() ?? "",
                 symbol.Name, "", "", isPartial, false,
-                ImmutableArray<ActionModel>.Empty, ImmutableArray<PropModel>.Empty, false,
+                ImmutableArray<ActionModel>.Empty, ImmutableArray<PropModel>.Empty, false, null,
                 diagnostics.ToImmutable());
         }
 
         var stateType = (INamedTypeSymbol)componentBase.TypeArguments[0];
+
+        string? wasm = null;
+        foreach (var attr in symbol.GetAttributes())
+        {
+            if (attr.AttributeClass?.ToDisplayString() != "Volt.VoltIslandAttribute") continue;
+            foreach (var arg in attr.NamedArguments)
+            {
+                if (arg.Key == "Wasm" && arg.Value.Value is string wasmUrl && wasmUrl.Length > 0)
+                    wasm = wasmUrl;
+            }
+        }
 
         var properties = CollectProperties(stateType, diagnostics, symbol.Name);
         bool useCtorInit = properties.Length > 0 && properties.All(p => p.CtorParamName is not null);
@@ -479,7 +491,7 @@ public sealed class VoltGenerator : IIncrementalGenerator
             stateType.ToDisplayString(),
             stateType.Name,
             isPartial, true,
-            actions.ToImmutable(), properties, useCtorInit,
+            actions.ToImmutable(), properties, useCtorInit, wasm,
             diagnostics.ToImmutable());
     }
 
@@ -685,6 +697,8 @@ public sealed class VoltGenerator : IIncrementalGenerator
             sb.AppendLine($"                Name = {SymbolDisplay.FormatLiteral(island.ClassName, quote: true)},");
             sb.AppendLine($"                Dispatch = static (stateJson, action, argsJson) => VoltIslands_{safeName}.Dispatch(stateJson, action, argsJson),");
             sb.AppendLine($"                Render = static (stateJson, sid, token) => VoltIslands_{safeName}.Render(stateJson, sid, token),");
+            if (island.Wasm is { Length: > 0 } wasmUrl)
+                sb.AppendLine($"                WasmModule = {SymbolDisplay.FormatLiteral(wasmUrl, quote: true)},");
             sb.AppendLine($"            }});");
 
             // dispatch + fragment render + partial impl, one file per island
@@ -777,6 +791,7 @@ public sealed class VoltGenerator : IIncrementalGenerator
         sb.AppendLine($"    partial class {NestedClassName(island.Namespace, island.TypeFqn)} : IVoltIsland<{stateFqn}>");
         sb.AppendLine("    {");
         sb.AppendLine($"        public static string IslandName => {SymbolDisplay.FormatLiteral(island.ClassName, quote: true)};");
+        sb.AppendLine($"        public static string? WasmModule => {(island.Wasm is { Length: > 0 } wasmUrl ? SymbolDisplay.FormatLiteral(wasmUrl, quote: true) : "null")};");
 
         // ---- serialize ----
         foreach (var prop in island.Properties)

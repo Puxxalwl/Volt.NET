@@ -148,6 +148,9 @@ the same `VoltPage` render code (no runtime interpretation):
 Directives: `@page`, `@mode`, `@revalidate`, `@namespace`. In markup: `@expr` / `@(expr)`
 interpolate, `@{ … }` runs raw C#, `@@` is a literal `@`. Code blocks switch back to markup
 when a line starts with a tag. `notfound.volt` / `error.volt` are special pages.
+Islands embed directly: `<volt-island name="Counter" state='{"count":0}' />`
+(a `[VoltIsland(Wasm = "…")]` component adds `data-v-wasm` and dispatches client-side —
+[the module contract](CONTRACT.md)).
 This site's [templates page](apps/docs/Pages/Templates.volt) is written in .volt.
 
 ## Transports (M2)
@@ -159,7 +162,44 @@ This site's [templates page](apps/docs/Pages/Templates.volt) is written in .volt
   parsing, keep-alive and pipelining, `Expect: 100-continue`, ETag/304, static assets from
   memory. The per-request fast path (parse → route match → cached SSG serve) allocates
   **0 bytes**, gated by tests.
-* **Kestrel bridge**: for TLS, HTTP/2/3 and the ASP.NET ecosystem.
+* **TLS (M3)**: `--tls-cert cert.pem --tls-key key.pem` (or `VOLT_TLS_CERT`/`VOLT_TLS_KEY`)
+  wraps accepted connections in `SslStream` — same zero-alloc path, scheme switches to https.
+* **Kestrel bridge**: for HTTP/2/3 and the ASP.NET ecosystem.
+
+## Volt vs Blazor
+
+Both are C# fullstack frameworks. The difference is the interaction model — and it
+shows up in latency, memory and page weight. Volt's own numbers below are measured
+on this repo's benchmarks; Blazor figures are architectural facts, not my benchmarks.
+
+| | **Volt.NET** | **Blazor Server** | **Blazor WASM / Auto** |
+|---|---|---|---|
+| Interaction path | plain HTTP POST → typed static action → HTML fragment; WASM dispatch is optional | SignalR circuit (websocket, one per user, state lives on the server) | runs in the browser |
+| Server memory per interactive user | **none** — state travels in a token, cache shared by SSG | circuit + render tree diff state held for the connection lifetime | none (client) |
+| Fallback without JS | **works** — real form POST + 303 + token re-render | broken | broken (WASM *is* the JS) |
+| First load | **~11 KB** hydrate.js, static HTML immediately | app shell + circuit setup | .NET runtime download (MBs even trimmed), loading UI |
+| Crawlability / SEO | SSG pages are plain HTML; meta/sitemap/robots built in | needs prerender for SEO | needs prerender |
+| Render model | explicit `HtmlWriter` calls, cached SSG = serve 0-alloc bytes | virtual render tree, per-interaction diff over the circuit | render tree, client-side diff |
+| Actions | static `(State, args) → State` methods, unit-testable without a host | component instance methods + event system | component instance methods |
+| Native AOT | yes — full stack: ~25 ms cold start, ~6 MB RSS, one binary | server: yes (with limits); client: no (wasm runtime) | no AOT path for the client payload |
+
+Honest counterpoints — Blazor wins where you need: a mature component ecosystem
+(MudBlazor, Telerik…), rich client-side state/UI composition, forms validation
+built into components, and a large hiring pool. If your app is mostly *content +
+islands of interactivity* (catalogs, marketing, blogs, landing pages, tools),
+Volt's model costs less memory and bytes per user; if it's a dense CRUD SPA,
+Blazor's component model is the safer bet.
+
+Why Volt is lean by construction:
+
+* **Stateless beats stateful.** A Blazor Server circuit pins memory and a websocket
+  per user for as long as they're on the page. A Volt island is stateless HTML —
+  the state rides a token, actions are one-shot POSTs. The server keeps only the
+  SSG cache, shared across all users.
+* **Ship HTML, not a runtime.** The interactive payload is 11 KB of vanilla JS;
+  WASM islands are opt-in per component, not the default app model.
+* **Serve from memory.** The zero-alloc fast path answers a cached SSG page in
+  ~3.2 µs with 0 bytes allocated; assets are embedded in the single binary.
 
 ## Render modes
 
@@ -191,7 +231,7 @@ volt serve [path] [--port N] run without watch
 ```bash
 dotnet build                          # builds everything
 DOTNET_ROLL_FORWARD=Major dotnet run --project examples/starter   # serve the demo
-DOTNET_ROLL_FORWARD=Major dotnet test # 101 tests: unit + compiler + E2E (both transports)
+DOTNET_ROLL_FORWARD=Major dotnet test # 112 tests: unit + compiler + E2E (both transports)
 dotnet run -c Release --project tests/Volt.Benchmarks              # benchmarks
 ```
 
@@ -220,5 +260,10 @@ tests, benchmarks — **done**.
 
 M2: built-in zero-allocation HTTP/1.1 server (transport-neutral engine + Kestrel adapter,
 +58% throughput, AOT ~25 ms / ~6 MB), `.volt` Razor-like templates, in-memory static
-assets — **done**. Planned M3: WASM islands, TLS on the built-in server, dist bundling
-into the binary, `<volt-island>` in .volt markup.
+assets — **done**.
+
+M3: `<volt-island>` in .volt markup, WASM island protocol (client-side dispatch,
+module contract in CONTRACT.md), TLS on the built-in server (SslStream + PEM certs),
+static assets embedded in the binary (single-file/AOT works without wwwroot on disk) —
+**done**. Planned M4: C# → wasm island build mode, dist bundling of hydrated client code,
+distributed ISR cache.

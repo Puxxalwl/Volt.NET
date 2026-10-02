@@ -275,6 +275,8 @@ internal static class VoltFileParser
                 int end = _t.IndexOf('>', _i);
                 var name = _t.Substring(_i + 2, end - _i - 2).Trim();
                 _i = end + 1;
+                if (name == "volt-island")
+                    return 0; // self-contained node: the close tag emits nothing
                 _sb.AppendLine($"            }} // /{name}");
                 return -1;
             }
@@ -288,6 +290,12 @@ internal static class VoltFileParser
                 EmitText("<");
                 _i++;
                 return 0;
+            }
+
+            // <volt-island name="Counter" state='{"count":0}' [sid="s1"] /> — runtime island embedding
+            if (tagName == "volt-island")
+            {
+                return ParseVoltIslandNode(nameEnd);
             }
 
             // attributes
@@ -372,6 +380,68 @@ internal static class VoltFileParser
                 EmitAttr(name, value, isExprValue);
             return 1;
         }
+
+
+        /// <summary>Parses a &lt;volt-island&gt; node: name + state (JSON) + optional sid.</summary>
+        private int ParseVoltIslandNode(int afterName)
+        {
+            string name = "", state = "", sid = "";
+            int i = afterName;
+            while (i < _t.Length)
+            {
+                while (i < _t.Length && char.IsWhiteSpace(_t[i])) i++;
+                if (i >= _t.Length) break;
+                if (_t[i] == '>') { i++; break; }
+                if (_t[i] == '/' && i + 1 < _t.Length && _t[i + 1] == '>') { i += 2; break; }
+
+                int attrNameStart = i;
+                while (i < _t.Length && _t[i] != '=' && _t[i] != '>' && !char.IsWhiteSpace(_t[i])) i++;
+                var attrName = _t.Substring(attrNameStart, i - attrNameStart);
+
+                string attrValue = "";
+                int j = i;
+                while (j < _t.Length && char.IsWhiteSpace(_t[j])) j++;
+                if (j < _t.Length && _t[j] == '=')
+                {
+                    j++;
+                    while (j < _t.Length && char.IsWhiteSpace(_t[j])) j++;
+                    if (j < _t.Length && (_t[j] == '"' || _t[j] == '\''))
+                    {
+                        char quote = _t[j];
+                        int valueStart = j + 1;
+                        int valueEnd = _t.IndexOf(quote, valueStart);
+                        if (valueEnd < 0) throw new FormatException("unterminated attribute value in <volt-island>");
+                        attrValue = _t.Substring(valueStart, valueEnd - valueStart);
+                        i = valueEnd + 1;
+                    }
+                    else
+                    {
+                        int valueStart = j;
+                        while (j < _t.Length && !char.IsWhiteSpace(_t[j]) && _t[j] != '>') j++;
+                        attrValue = _t.Substring(valueStart, j - valueStart);
+                        i = j;
+                    }
+                }
+
+                if (attrName == "name") name = attrValue;
+                else if (attrName == "state") state = attrValue;
+                else if (attrName == "sid") sid = attrValue;
+            }
+            _i = i;
+
+            if (name.Length == 0)
+                throw new FormatException("<volt-island> requires a name attribute");
+            if (state.Length == 0)
+                throw new FormatException("<volt-island> requires a state attribute (wire-format JSON)");
+
+            if (sid.Length > 0)
+                _sb.AppendLine($"            w.IslandByName({Symbol(name)}, {Symbol(state)}, ctx, {Symbol(sid)});");
+            else
+                _sb.AppendLine($"            w.IslandByName({Symbol(name)}, {Symbol(state)}, ctx);");
+            return 0;
+        }
+
+        private static string Symbol(string literal) => "\"" + literal.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
         /// <summary>'@' transitions: @@, @{code}, @(expr), @keyword {…}, @expr.</summary>
         private void ParseTransition()

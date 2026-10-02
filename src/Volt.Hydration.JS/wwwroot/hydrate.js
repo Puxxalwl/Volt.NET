@@ -48,6 +48,20 @@ async function dispatchAction(el, action) {
   const sid = islandEl.getAttribute('data-sid');
   const rec = islands.get(sid);
   if (!rec) return;
+
+  // WASM island (M3, experimental): dispatch + render client-side, no round-trip.
+  const wasmUrl = islandEl.getAttribute('data-v-wasm');
+  if (wasmUrl) {
+    try {
+      const module = await loadWasmModule(wasmUrl);
+      const html = wasmDispatchIsland(module, rec.island, action, rec.state, formArgs(form));
+      if (html) applyFragment(form, html);
+    } catch (err) {
+      console.error('volt: wasm island error', err);
+    }
+    return;
+  }
+
   try {
     const res = await fetch('/_volt/action', {
       method: 'POST',
@@ -69,6 +83,58 @@ async function dispatchAction(el, action) {
   } catch (err) {
     console.error('volt: action error', err);
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// WASM islands (M3, experimental) — see CONTRACT.md for the module contract:
+//   exports: memory, alloc(n) -> offset, volt_dispatch(...) -> resultPtr,
+//            volt_render(statePtr, stateLen) -> htmlPtr
+// strings cross the boundary as UTF-8, NUL-terminated, in module memory.
+// ---------------------------------------------------------------------------
+
+const wasmModules = new Map();
+
+async function loadWasmModule(url) {
+  let entry = wasmModules.get(url);
+  if (!entry) {
+    entry = WebAssembly.instantiateStreaming(fetch(url), {}).then((mod) => mod.instance);
+    wasmModules.set(url, entry);
+  }
+  return entry;
+}
+
+function wasmWriteString(instance, s) {
+  const bytes = new TextEncoder().encode(s);
+  const exports = instance.exports;
+  const offset = exports.alloc(bytes.length + 1);
+  const memory = new Uint8Array(exports.memory.buffer, offset, bytes.length + 1);
+  memory.set(bytes);
+  memory[bytes.length] = 0; // NUL terminator
+  return { offset: offset, length: bytes.length };
+}
+
+function wasmReadString(instance, offset) {
+  if (!offset) return null;
+  const bytes = new Uint8Array(instance.exports.memory.buffer);
+  let end = offset;
+  while (end < bytes.length && bytes[end] !== 0) end++;
+  return new TextDecoder().decode(bytes.subarray(offset, end));
+}
+
+function wasmDispatchIsland(instance, island, action, state, args) {
+  const i = wasmWriteString(instance, island);
+  const a = wasmWriteString(instance, action);
+  const st = wasmWriteString(instance, JSON.stringify(state));
+  const ar = wasmWriteString(instance, JSON.stringify(args || {}));
+  const resultPtr = instance.exports.volt_dispatch(
+    i.offset, i.length, a.offset, a.length,
+    st.offset, st.length, ar.offset, ar.length);
+  const newState = wasmReadString(instance, resultPtr);
+  if (!newState) throw new Error('volt_dispatch failed');
+  const statePtr = wasmWriteString(instance, newState);
+  const htmlPtr = instance.exports.volt_render(statePtr.offset, statePtr.length);
+  return wasmReadString(instance, htmlPtr);
 }
 
 function applyFragment(form, html) {

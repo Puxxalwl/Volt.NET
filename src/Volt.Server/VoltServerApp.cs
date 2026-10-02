@@ -1,6 +1,9 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 namespace Volt;
 
@@ -23,34 +26,37 @@ public static class VoltServerApp
 
         var port = ResolvePort(args, options);
         var endpoint = new IPEndPoint(IPAddress.Loopback, port);
+        var certificate = ResolveCertificate(args);
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-        using var server = new Volt.Server.VoltServer(options);
+        using var server = new Volt.Server.VoltServer(options, certificate);
         server.Start(endpoint);
         var actual = (IPEndPoint)server.LocalEndPoint!;
-        options.BaseUrl ??= $"http://{actual.Address}:{actual.Port}";
-        Console.WriteLine($"Volt server listening on http://{actual.Address}:{actual.Port}");
+        var scheme = certificate is null ? "http" : "https";
+        options.BaseUrl ??= $"{scheme}://{actual.Address}:{actual.Port}";
+        Console.WriteLine($"Volt server listening on {scheme}://{actual.Address}:{actual.Port}");
 
         cts.Token.WaitHandle.WaitOne();
         return 0;
     }
 
     /// <summary>Starts an in-process test server on a random port. For E2E tests.</summary>
-    public static async Task<(string Url, VoltServerHandle Server)> StartTestServerAsync(VoltOptions? options = null)
+    public static async Task<(string Url, VoltServerHandle Server)> StartTestServerAsync(VoltOptions? options = null, X509Certificate2? tlsCertificate = null)
     {
         options ??= new VoltOptions { DevMode = true, BaseUrl = "http://127.0.0.1" };
         VoltRuntime.DevMode = options.DevMode;
         LoadHydrateScript(typeof(Volt.Hydration.HydrationRuntime).Assembly);
         VoltStaticAssets.Load();
 
-        var server = new Volt.Server.VoltServer(options);
+        var server = new Volt.Server.VoltServer(options, tlsCertificate);
         server.Start(new IPEndPoint(IPAddress.Loopback, 0));
         await Task.Yield();
         var endpoint = (IPEndPoint)server.LocalEndPoint!;
-        options.BaseUrl = $"http://{endpoint.Address}:{endpoint.Port}";
-        return ($"http://{endpoint.Address}:{endpoint.Port}", new VoltServerHandle(server));
+        var scheme = tlsCertificate is null ? "http" : "https";
+        options.BaseUrl = $"{scheme}://{endpoint.Address}:{endpoint.Port}";
+        return ($"{scheme}://{endpoint.Address}:{endpoint.Port}", new VoltServerHandle(server));
     }
 
     internal static void LoadHydrateScript(Assembly hydrationAssembly)
@@ -72,6 +78,23 @@ public static class VoltServerApp
         VoltRuntime.SetHydrateScript(ms.ToArray());
     }
 
+
+    /// <summary>Reads --tls-cert/--tls-key (or VOLT_TLS_CERT/VOLT_TLS_KEY) and builds the server certificate.</summary>
+    private static X509Certificate2? ResolveCertificate(string[] args)
+    {
+        string? certPath = ArgValue(args, "--tls-cert") ?? Environment.GetEnvironmentVariable("VOLT_TLS_CERT");
+        string? keyPath = ArgValue(args, "--tls-key") ?? Environment.GetEnvironmentVariable("VOLT_TLS_KEY");
+        if (certPath is null) return null;
+        return X509Certificate2.CreateFromPemFile(certPath, keyPath);
+    }
+
+    private static string? ArgValue(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == name) return args[i + 1];
+        return null;
+    }
+
     private static int ResolvePort(string[] args, VoltOptions options)
     {
         for (int i = 0; i < args.Length - 1; i++)
@@ -81,7 +104,19 @@ public static class VoltServerApp
         if (int.TryParse(Environment.GetEnvironmentVariable("VOLT_PORT"), out var envPort)) return envPort;
         return 5000;
     }
+
+    /// <summary>Generates a self-signed localhost certificate for tests/dev TLS.</summary>
+    public static X509Certificate2 CreateSelfSignedCertificate()
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=localhost", rsa, HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        var notBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var notAfter = DateTimeOffset.UtcNow.AddDays(7);
+        return request.CreateSelfSigned(notBefore, notAfter);
+    }
 }
+
 
 /// <summary>Handle over a running test server.</summary>
 public sealed class VoltServerHandle : IDisposable

@@ -268,4 +268,28 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.Contains("@literal", html);
         Assert.EndsWith("</html>", html);
     }
+
+    [Fact]
+    public async Task VoltIslandNode_InTemplatePage_RendersFormAndState()
+    {
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync(_url + "/volt-isle");
+        // the island registry path emits the full CONTRACT form markup
+        Assert.Contains("<form method=\"post\" action=\"/_volt/fallback\" data-v-form>", html);
+        Assert.Contains("<volt-island", html);
+        Assert.Contains("data-v=\"Todo\"", html);
+        Assert.Contains("wire state #2", html);
+        Assert.Contains("hydrate.js", html);
+    }
+
+    [Fact]
+    public async Task WasmIsland_MarkupCarriesWasmModuleUrl()
+    {
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync(_url + "/wasm-isle");
+        Assert.Contains("<volt-island", html);
+        Assert.Contains("data-v=\"Calc\"", html);
+        Assert.Contains("data-v-wasm=\"/islands/calc.wasm\"", html);
+        Assert.Contains("data-props=\"{&quot;value&quot;:7}\"", html);
+    }
 }

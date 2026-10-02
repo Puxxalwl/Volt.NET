@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 
 namespace Volt;
@@ -18,21 +19,57 @@ public static class VoltStaticAssets
 
     internal sealed record Asset(string Name, byte[] Bytes, string ETag, string ContentType);
 
-    /// <summary>Loads wwwroot from <paramref name="contentRoot"/> (default: AppContext.BaseDirectory).</summary>
-    public static void Load(string? contentRoot = null)
+    private const string EmbeddedPrefix = "volt.static.";
+
+    /// <summary>
+    /// Loads wwwroot from <paramref name="contentRoot"/> (default: AppContext.BaseDirectory);
+    /// when the directory is missing or empty, falls back to assets embedded in
+    /// <paramref name="assembly"/> (default: the entry assembly) — single-binary deployments.
+    /// </summary>
+    public static void Load(string? contentRoot = null, Assembly? assembly = null)
     {
         contentRoot ??= AppContext.BaseDirectory;
         var wwwroot = Path.Combine(contentRoot, "wwwroot");
-        if (!Directory.Exists(wwwroot))
-        {
-            _assets = [];
-            return;
-        }
-        _root = wwwroot;
 
         var list = new List<Asset>(16);
-        LoadDirectory(wwwroot, "", list);
+        if (Directory.Exists(wwwroot))
+        {
+            _root = wwwroot;
+            LoadDirectory(wwwroot, "", list);
+        }
+        if (list.Count == 0)
+        {
+            var asm = assembly ?? Assembly.GetEntryAssembly();
+            if (asm is not null) LoadFromAssembly(asm, list);
+        }
         _assets = list.ToArray();
+    }
+
+    /// <summary>Pure: names of assets embedded in an assembly ("volt.static." resources).</summary>
+    public static List<string> ListEmbedded(Assembly assembly)
+    {
+        var names = new List<string>();
+        foreach (var name in assembly.GetManifestResourceNames())
+        {
+            if (name.StartsWith(EmbeddedPrefix, StringComparison.Ordinal))
+                names.Add("/" + name[EmbeddedPrefix.Length..].Replace('\\', '/'));
+        }
+        names.Sort(StringComparer.Ordinal);
+        return names;
+    }
+
+    private static void LoadFromAssembly(Assembly assembly, List<Asset> list)
+    {
+        foreach (var name in assembly.GetManifestResourceNames())
+        {
+            if (!name.StartsWith(EmbeddedPrefix, StringComparison.Ordinal)) continue;
+            using var stream = assembly.GetManifestResourceStream(name);
+            if (stream is null) continue;
+            using var ms = new MemoryStream((int)stream.Length);
+            stream.CopyTo(ms);
+            var path = "/" + name[EmbeddedPrefix.Length..].Replace('\\', '/');
+            list.Add(new Asset(path, ms.ToArray(), ComputeETag(ms.ToArray()), ContentTypeFor(path)));
+        }
     }
 
     private static void LoadDirectory(string dir, string prefix, List<Asset> list)

@@ -176,4 +176,49 @@ public sealed class VoltFileGenerationTests
         Assert.DoesNotContain("a comment", generated.Replace("VOLT", "V"));
         Assert.Contains("w.Text(\"text\");", generated);
     }
+
+    [Fact]
+    public void VoltPage_VoltIslandNodeEmitsIslandByName()
+    {
+        var generated = RunGenerator(("/app/Pages/Isle.volt", """
+            @page /isle
+            <volt-island name="Todo" state='{"text":"hi","count":1,"done":false}' />
+            """));
+
+        Assert.Contains("""w.IslandByName("Todo", "{\"text\":\"hi\",\"count\":1,\"done\":false}", ctx);""", generated);
+    }
+
+    [Fact]
+    public void VoltPage_VoltIslandWithSidEmitsSidArgument()
+    {
+        var generated = RunGenerator(("/app/Pages/IsleSid.volt", """
+            @page /isle2
+            <volt-island name="Todo" state='{"done":true}' sid="hero" />
+            """));
+
+        Assert.Contains("""w.IslandByName("Todo", "{\"done\":true}", ctx, "hero");""", generated);
+    }
+
+    [Fact]
+    public void VoltPage_VoltIslandClosingTagEmitsNothing()
+    {
+        var generated = RunGenerator(("/app/Pages/IsleClose.volt", """
+            @page /isle3
+            <volt-island name="Todo" state='{}'></volt-island>
+            """));
+
+        Assert.Contains("""w.IslandByName("Todo", "{}", ctx);""", generated);
+        Assert.DoesNotContain("} // /volt-island", generated);
+    }
+
+    [Fact]
+    public void VoltPage_VoltIslandMissingName_SkipsRegistration()
+    {
+        var generated = RunGenerator(("/app/Pages/IsleBad.volt", """
+            @page /isle4
+            <volt-island state='{}' />
+            """));
+
+        Assert.DoesNotContain("RouteRegistry.Root.Add(\"/isle4\"", generated);
+    }
 }

@@ -94,3 +94,38 @@ required from hydrate.js for this path.
 - **No logging in production paths** except `console.error` on failures.
 - **Constraints**: single ES module file, ES2020+, zero dependencies, no frameworks,
   ≤ 25 KB unminified, served as-is (no build step), strict mode.
+
+## WASM islands (M3, experimental)
+
+A `[VoltIsland(Wasm = "/islands/x.wasm")]` component changes the emitted markup and
+the client dispatch path:
+
+**Markup**: the `volt-island` element additionally carries
+`data-v-wasm="/islands/x.wasm"`. The server registry keeps serving SSR markup,
+the no-JS fallback form and server actions — the WASM module is an optimization
+for the interactive path, not a replacement.
+
+**Client contract (hydrate.js)**: when a `data-v-wasm` attribute is present on the
+island element, `dispatchAction` does NOT POST to `/_volt/action`. Instead it
+instantiates the module (`WebAssembly.instantiateStreaming`, cached by URL) and
+calls, in module memory (UTF-8, NUL-terminated strings):
+
+```
+exports:
+  memory:        WebAssembly.Memory
+  alloc(n):      i32 offset          — allocate n bytes (n includes the NUL)
+  volt_dispatch(islandPtr, islandLen, actionPtr, actionLen,
+                statePtr, stateLen, argsPtr, argsLen) -> resultPtr
+                   resultPtr: NUL-terminated new-state JSON, 0 = error
+  volt_render(statePtr, stateLen) -> htmlPtr
+                   htmlPtr: NUL-terminated replacement form markup
+                   (the same CONTRACT form fragment /_volt/action returns), 0 = error
+```
+
+`hydrate.js` then applies the returned fragment via the standard morph path
+(`applyFragment`). The island/action/args strings are exactly the wire values the
+server flow sends (`island` name, action name, state object, args object).
+
+**Module authors**: any language that can export the four symbols above works.
+For C# components, a future `wasm` build mode of the Volt generator is planned
+(the component render/dispatch code compiles to the same contract).
