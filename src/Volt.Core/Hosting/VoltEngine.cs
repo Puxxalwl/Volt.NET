@@ -16,10 +16,32 @@ public static class VoltEngine
     {
         try
         {
-            await HandleCoreAsync(ctx, options);
+            if (options.HasMiddleware)
+            {
+                // onion: user middleware around the whole core pipeline
+                Func<Task> chain = () => HandleCoreAsync(ctx, options);
+                var list = options.Middleware;
+                for (int i = list.Count - 1; i >= 0; i--)
+                {
+                    var middleware = list[i];
+                    var next = chain;
+                    chain = () => middleware(ctx, next);
+                }
+                await chain();
+            }
+            else
+            {
+                await HandleCoreAsync(ctx, options);
+            }
         }
         catch (Exception ex)
         {
+            if (options.OnException is { } handler)
+            {
+                try { await handler(ctx, ex); }
+                catch { ctx.StatusCode = 500; ctx.ResponseStarted = true; }
+                return;
+            }
             try { await RenderErrorAsync(ctx, ex, options); }
             catch { ctx.StatusCode = 500; ctx.ResponseStarted = true; }
         }
@@ -39,6 +61,11 @@ public static class VoltEngine
         VoltHttpContext response,
         VoltOptions options)
     {
+        // M6: middleware must see every request — cached pages included.
+        // While any middleware is registered the async pipeline handles everything.
+        if (options.HasMiddleware)
+            return false;
+
         // fallback token (?__v=…) → async path (renders with overridden island state)
         if (query.IndexOf("__v=", StringComparison.Ordinal) >= 0)
             return false;

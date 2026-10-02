@@ -29,6 +29,35 @@ public sealed class VoltOptions
     /// </summary>
     public string? SsgCacheDirectory { get; set; }
 
+    // ---- M6: middleware pipeline ------------------------------------------------------
+
+    private List<VoltMiddleware>? _middleware;
+
+    /// <summary>
+    /// M6: middleware wraps every request that goes through the async pipeline
+    /// (pages, actions, fallback, internal endpoints). While any middleware is
+    /// registered the zero-allocation fast path is bypassed — middleware must not
+    /// be skipped for cached pages, so correctness wins over the last microsecond.
+    /// </summary>
+    public IReadOnlyList<VoltMiddleware> Middleware => _middleware ?? (IReadOnlyList<VoltMiddleware>)Array.Empty<VoltMiddleware>();
+
+    /// <summary>true when any middleware is registered (disables the fast path).</summary>
+    public bool HasMiddleware => _middleware is { Count: > 0 };
+
+    /// <summary>Registers a middleware (order = registration order). Fluent.</summary>
+    public VoltOptions Use(VoltMiddleware middleware)
+    {
+        _middleware ??= new List<VoltMiddleware>(4);
+        _middleware.Add(middleware);
+        return this;
+    }
+
+    /// <summary>
+    /// M6: custom error handler (replaces the default error page). Gets the exception;
+    /// write to <paramref name="ctx"/> what you want the client to see.
+    /// </summary>
+    public Func<VoltHttpContext, Exception, Task>? OnException { get; set; }
+
     public static VoltOptions FromEnvironment()
     {
         var dev = Environment.GetEnvironmentVariable("VOLT_DEV") == "1"

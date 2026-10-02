@@ -66,6 +66,9 @@ internal static class VoltPipeline
         if (vctx.CacheControl is not null) ctx.Response.Headers.CacheControl = vctx.CacheControl;
         if (vctx.Allow is not null) ctx.Response.Headers.Allow = vctx.Allow;
         if (vctx.ContentLength >= 0) ctx.Response.ContentLength = vctx.ContentLength;
+        if (vctx.ExtraHeaders is { Count: > 0 })
+            foreach (var (name, value) in vctx.ExtraHeaders)
+                ctx.Response.Headers[name] = value;
         if (vctx.HasBody)
             await ctx.Response.BodyWriter.FlushAsync(ctx.RequestAborted);
     }

@@ -28,6 +28,9 @@ public sealed class VoltHttpContext
     public IBufferWriter<byte>? Output;    // engine writes the body here
     public bool HasBody;
 
+    /// <summary>M6: extra response headers set by middleware (e.g. Set-Cookie, X-*).</summary>
+    public List<(string Name, string Value)>? ExtraHeaders;
+
     /// <summary>Response header line + body already produced (error pages must not re-write).</summary>
     public bool ResponseStarted;
 
@@ -53,6 +56,7 @@ public sealed class VoltHttpContext
         HasBody = false;
         ResponseStarted = false;
         BodyMemory = null;
+        ExtraHeaders = null;
     }
 }
 

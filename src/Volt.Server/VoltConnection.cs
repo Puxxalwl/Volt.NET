@@ -238,6 +238,9 @@ internal sealed class VoltConnection : IDisposable
         if (ctx.CacheControl is not null) WriteHeader(writer, "Cache-Control"u8, ctx.CacheControl);
         if (ctx.Allow is not null) WriteHeader(writer, "Allow"u8, ctx.Allow);
         if (ctx.Location is not null) WriteHeader(writer, "Location"u8, ctx.Location);
+        if (ctx.ExtraHeaders is { Count: > 0 })
+            foreach (var (name, value) in ctx.ExtraHeaders)
+                WriteHeader(writer, System.Text.Encoding.UTF8.GetBytes(name), value); // M6: middleware headers
         WriteContentLength(writer, contentLength);
         WriteHeader(writer, "Connection"u8, keepAlive ? "keep-alive" : "close");
     }
