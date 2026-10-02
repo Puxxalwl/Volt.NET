@@ -206,10 +206,39 @@ public static class VoltEngine
         }
 
         // ---- page routes ------------------------------------------------
+        // M6: POST to a page route → form handler (bind + validate, no JS required)
+        if (method == "POST")
+        {
+            var postRoute = ResolveRoute(path);
+            if (postRoute is null)
+            {
+                ctx.StatusCode = 404;
+                ctx.Allow = "GET, HEAD, POST";
+                ctx.ResponseStarted = true;
+                return;
+            }
+            var postPage = postRoute.Factory();
+            var postRequest = BuildRequest(ctx, options, path, postRoute);
+            postRequest.PostFields = await ReadPostFieldsAsync(ctx);
+            var postResult = await postPage.OnPostAsync(postRequest);
+            if (postResult.IsRedirect)
+            {
+                ctx.StatusCode = postResult.StatusCode;
+                ctx.Location = postResult.Location;
+                ctx.ResponseStarted = true;
+                ctx.HasBody = false;
+                return;
+            }
+            await postPage.OnPreRenderAsync(postRequest);
+            RenderToResponse(ctx, postPage, postRequest, path, token: null); // POST responses are never cached
+            Flush(ctx);
+            return;
+        }
+
         if (method != "GET" && method != "HEAD")
         {
             ctx.StatusCode = 405;
-            ctx.Allow = "GET, HEAD";
+            ctx.Allow = "GET, HEAD, POST";
             ctx.ResponseStarted = true;
             return;
         }
@@ -241,6 +270,20 @@ public static class VoltEngine
         }
 
         Flush(ctx);
+    }
+
+    /// <summary>M6: reads and parses the urlencoded POST body into fields (async path).</summary>
+    private static async Task<IReadOnlyList<(string Name, string Value)>> ReadPostFieldsAsync(VoltHttpContext ctx)
+    {
+        if (ctx.BodyMemory is { } bodyMemory)
+            return FallbackFormReader.Parse(bodyMemory.Span);
+        if (ctx.Body is { } stream)
+        {
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ctx.Aborted);
+            return FallbackFormReader.Parse(ms.ToArray());
+        }
+        return Array.Empty<(string, string)>();
     }
 
     private static void Flush(VoltHttpContext ctx)

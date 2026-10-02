@@ -30,8 +30,40 @@ public abstract class VoltPage
     /// <summary>Async data loading before rendering. Runs per request (SSR) or per render (SSG).</summary>
     public virtual Task OnPreRenderAsync(VoltRequest request) => Task.CompletedTask;
 
+    // ---- M6: forms ---------------------------------------------------------------------
+
+    /// <summary>
+    /// POST handler. Runs for POSTs to this page's route before rendering:
+    /// bind a typed form via <see cref="VoltRequest.TryForm{T}"/>, keep the
+    /// result on instance fields and render it in <see cref="Render"/> — the
+    /// whole flow works without JavaScript. Return <see cref="VoltPostResult.Redirect"/>
+    /// for PRG instead of rendering.
+    /// </summary>
+    public virtual Task<VoltPostResult> OnPostAsync(VoltRequest request)
+        => Task.FromResult(VoltPostResult.Render);
+
     /// <summary>Renders the full HTML document.</summary>
     public abstract void Render(HtmlWriter w, RenderContext ctx);
+}
+
+/// <summary>What the engine does after <see cref="VoltPage.OnPostAsync"/>.</summary>
+public sealed record VoltPostResult
+{
+    private VoltPostResult(int status, string? location)
+    {
+        StatusCode = status;
+        Location = location;
+    }
+
+    /// <summary>Render the page (default) — errors/success visible immediately, no JS needed.</summary>
+    public static VoltPostResult Render { get; } = new(200, null);
+
+    /// <summary>Redirect instead of rendering (PRG pattern): 303 by default.</summary>
+    public static VoltPostResult Redirect(string url, int statusCode = 303) => new(statusCode, url);
+
+    public int StatusCode { get; }
+    public string? Location { get; }
+    public bool IsRedirect => Location is not null;
 }
 
 /// <summary>Base class for Pages/error.cs: renders unhandled exceptions.</summary>

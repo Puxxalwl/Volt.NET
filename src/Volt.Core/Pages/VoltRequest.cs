@@ -54,4 +54,27 @@ public sealed class VoltRequest
     }
 
     public string? Header(string name) => HeaderLookup?.Invoke(name);
+
+    // ---- M6: typed forms --------------------------------------------------------------
+
+    /// <summary>
+    /// POST body fields (urlencoded), parsed by the engine before OnPostAsync.
+    /// Null for requests without a body.
+    /// </summary>
+    public IReadOnlyList<(string Name, string Value)>? PostFields { get; internal set; }
+
+    /// <summary>
+    /// Binds the submitted POST fields to a form and validates it
+    /// (generated binder — reflection-free, AOT safe). Returns false on
+    /// validation errors; <paramref name="errors"/> carries them.
+    /// </summary>
+    public bool TryForm<T>(out T form, out IReadOnlyList<VoltFormError> errors)
+        where T : class, IVoltForm
+    {
+        var fields = PostFields ?? Array.Empty<(string, string)>();
+        var bound = T.VoltBind(fields, out var errorList);
+        form = (T)bound!;
+        errors = errorList is null ? Array.Empty<VoltFormError>() : errorList;
+        return errorList is null;
+    }
 }

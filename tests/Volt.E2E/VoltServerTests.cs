@@ -93,12 +93,15 @@ public sealed class VoltServerTests : IClassFixture<ServerFixture>
     }
 
     [Fact]
-    public async Task Post_ToPage_Returns405()
+    public async Task Post_ToPage_RendersPage_M6FormFlow()
     {
+        // M6: POST to a page route runs OnPostAsync then renders (form flow);
+        // pages without a POST handler simply render (idempotent default)
         using var http = new HttpClient();
         using var res = await http.PostAsync(_fx.Url + "/", new StringContent("x"));
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, res.StatusCode);
-        Assert.Contains("GET,HEAD", string.Join(",", res.Content.Headers.Allow));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("E2E home", html);
     }
 
     [Fact]

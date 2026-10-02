@@ -113,3 +113,104 @@ public sealed class RouteGenerationTests
     }
 
 }
+
+// ---- M6: [VoltForm] binder emission ------------------------------------------------
+
+/// <summary>Runs the generator over real compiled sources (forms need symbols).</summary>
+public sealed class FormGenerationTests
+{
+    private static string RunGeneratorWithSources(params (string Path, string Text)[] sources)
+    {
+        var compilation = CSharpCompilation.Create("TestApp",
+            syntaxTrees: sources.Select(s => CSharpSyntaxTree.ParseText(s.Text, new CSharpParseOptions(LanguageVersion.Latest))),
+            references:
+            [
+                // Attribute lives in System.Runtime (a facade next to CoreLib) —
+                // typeof(object/Attribute) both resolve to CoreLib, so take the real file
+                MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+                MetadataReference.CreateFromFile(System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(typeof(object).Assembly.Location)!, "System.Runtime.dll")),
+                MetadataReference.CreateFromFile(typeof(Volt.VoltPage).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(System.Collections.Generic.List<string>).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(System.Linq.Enumerable).Assembly.Location),
+            ]);
+
+        var driver = CSharpGeneratorDriver.Create([new Volt.Compiler.VoltGenerator().AsSourceGenerator()]);
+        var result = driver.RunGenerators(compilation).GetRunResult();
+
+        var sb = new StringBuilder();
+        foreach (var tree in result.GeneratedTrees)
+        {
+            sb.AppendLine($"// ===== {tree.FilePath}");
+            sb.AppendLine(tree.GetText().ToString());
+        }
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            sb.AppendLine($"// ===== diagnostic {diagnostic.Id}");
+            sb.AppendLine(diagnostic.GetMessage());
+        }
+        return sb.ToString();
+    }
+
+    private const string FormSource = """
+        namespace App
+        {
+            [Volt.VoltForm]
+            public sealed partial class Subscribe
+            {
+                [Volt.VoltRequired(Message = "email is required"), Volt.VoltEmail]
+                public string Email { get; set; } = "";
+
+                [Volt.VoltRange(1, 5)]
+                public int? Rating { get; set; }
+
+                [Volt.VoltMaxLength(20)]
+                public string? Name { get; set; }
+
+                public bool Agree { get; set; }
+            }
+        }
+        """;
+
+    [Fact]
+    public void Form_BinderImplementsInterface_AndBindsCaseInsensitively()
+    {
+        var generated = RunGeneratorWithSources(("/app/Form.cs", FormSource));
+
+        Assert.Contains("partial class Subscribe : IVoltForm", generated);
+        Assert.Contains("static IVoltForm? IVoltForm.VoltBind", generated);
+        Assert.Contains("case \"email\":", generated);
+        Assert.Contains("case \"rating\":", generated);
+        Assert.Contains("case \"agree\":", generated);
+        // checkbox semantics
+        Assert.Contains("value is \"on\" or \"true\" or \"1\" or \"yes\"", generated);
+        // int binding
+        Assert.Contains("int.TryParse(value, out var parsed)", generated);
+        // presence flags for required value types
+        Assert.Contains("bool p_Email_present = false;", generated);
+    }
+
+    [Fact]
+    public void Form_Validators_EmitWithConstructorArgs()
+    {
+        var generated = RunGeneratorWithSources(("/app/Form.cs", FormSource));
+        Assert.Contains("string.IsNullOrWhiteSpace(form.Email)", generated);
+        Assert.Contains("\"email is required\"", generated);
+        // range from ctor args (1..5), not named args
+        Assert.Contains("v_Rating < 1L || v_Rating > 5L", generated);
+        Assert.Contains("\"must be between 1 and 5\"", generated);
+        // maxlength from ctor arg
+        Assert.Contains("form.Name is not null && form.Name.Length > 20", generated);
+        Assert.Contains("too long", generated);
+        // email shape check
+        Assert.Contains("IndexOf('@') <= 0", generated);
+    }
+
+    [Fact]
+    public void Form_NonPartial_ReportsDiagnostic()
+    {
+        var generated = RunGeneratorWithSources(("/app/Form.cs", FormSource.Replace("partial ", "")));
+
+        Assert.Contains("must be declared partial", generated);
+    }
+}

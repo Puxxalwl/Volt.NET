@@ -26,12 +26,272 @@ public sealed class VoltGenerator : IIncrementalGenerator
         RegisterRoutesPipeline(context);
         RegisterIslandsPipeline(context);
         RegisterVoltFilePipeline(context);
+        RegisterFormsPipeline(context);
     }
 
     // ==================================================================
-    // Pipeline 3: .volt template pages (Razor-like markup + C#)
+    // Pipeline 4: [VoltForm] typed form binders (reflection-free, AOT safe)
     // ==================================================================
 
+    private enum FormPropKind { String, Int32, Int64, Boolean, Double, Decimal, Unsupported }
+
+    private readonly record struct FormPropModel(
+        string Name, string LowerName, FormPropKind Kind, bool IsNullable,
+        bool Required, string RequiredMessage,
+        bool Email, string EmailMessage,
+        bool HasRange, long RangeMin, long RangeMax, string? RangeMessage,
+        bool HasMaxLength, int MaxLength, string MaxLengthMessage)
+    {
+        public bool NeedsParse => Kind is not FormPropKind.String;
+    }
+
+    private readonly record struct FormModel(
+        string Namespace, string ClassName, bool IsPartial,
+        ImmutableArray<FormPropModel> Properties, ImmutableArray<string> Diagnostics)
+    {
+        public string TypeFqn => (Namespace.Length > 0 ? Namespace + "." : "") + ClassName;
+    }
+
+    private static void RegisterFormsPipeline(IncrementalGeneratorInitializationContext context)
+    {
+        var forms = context.SyntaxProvider.ForAttributeWithMetadataName(
+            "Volt.VoltFormAttribute",
+            static (node, _) => node is TypeDeclarationSyntax,
+            static (ctx, _) => FormFromSymbol((INamedTypeSymbol)ctx.TargetSymbol, ctx.TargetNode as TypeDeclarationSyntax))
+            .WithTrackingName("VoltForms")
+            .Collect();
+
+        context.RegisterSourceOutput(forms, (spc, forms_) => EmitForms(spc, forms_));
+    }
+
+    private static FormModel FormFromSymbol(INamedTypeSymbol symbol, TypeDeclarationSyntax? node)
+    {
+        var diagnostics = ImmutableArray.CreateBuilder<string>();
+        bool isPartial = node?.Modifiers.Any(SyntaxKind.PartialKeyword) ?? false;
+        if (!isPartial)
+            diagnostics.Add($"form '{symbol.Name}' must be declared partial (source generation extends it with the binder)");
+
+        var props = ImmutableArray.CreateBuilder<FormPropModel>();
+        foreach (var member in symbol.GetMembers())
+        {
+            if (member is not IPropertySymbol property) continue;
+            if (property.DeclaredAccessibility != Accessibility.Public) continue;
+            if (property.IsStatic) continue;
+            if (property.GetMethod is null || property.SetMethod is null
+                || property.SetMethod.DeclaredAccessibility != Accessibility.Public)
+                continue; // non-bindable (computed) — fine, skip silently
+
+            var (kind, isNullable) = ClassifyFormProp(property.Type);
+            if (kind == FormPropKind.Unsupported)
+            {
+                diagnostics.Add($"form '{symbol.Name}': property '{property.Name}' has unsupported type '{property.Type.ToDisplayString()}' (supported: string, int, long, bool, double, decimal, and their nullable forms)");
+                continue;
+            }
+
+            bool required = false, email = false, hasRange = false, hasMaxLength = false;
+            string requiredMessage = "required", emailMessage = "must be an email address";
+            long rangeMin = 0, rangeMax = 0; string? rangeMessage = null;
+            int maxLength = 0; string maxLengthMessage = "too long";
+
+            foreach (var attr in property.GetAttributes())
+            {
+                switch (attr.AttributeClass?.ToDisplayString())
+                {
+                    case "Volt.VoltRequiredAttribute":
+                        required = true;
+                        requiredMessage = GetString(attr, "Message") ?? requiredMessage;
+                        break;
+                    case "Volt.VoltEmailAttribute":
+                        email = true;
+                        emailMessage = GetString(attr, "Message") ?? emailMessage;
+                        break;
+                    case "Volt.VoltRangeAttribute":
+                        hasRange = true;
+                        // min/max are constructor arguments, not named
+                        if (attr.ConstructorArguments.Length == 2)
+                        {
+                            rangeMin = attr.ConstructorArguments[0].Value is long min ? min : 0;
+                            rangeMax = attr.ConstructorArguments[1].Value is long max ? max : 0;
+                        }
+                        rangeMessage = GetString(attr, "Message");
+                        break;
+                    case "Volt.VoltMaxLengthAttribute":
+                        hasMaxLength = true;
+                        if (attr.ConstructorArguments.Length == 1)
+                            maxLength = attr.ConstructorArguments[0].Value is int len ? len : 0;
+                        maxLengthMessage = GetString(attr, "Message") ?? maxLengthMessage;
+                        break;
+                }
+            }
+
+            props.Add(new FormPropModel(
+                property.Name, property.Name.ToLowerInvariant(), kind, isNullable,
+                required, requiredMessage,
+                email, emailMessage,
+                hasRange, rangeMin, rangeMax, rangeMessage,
+                hasMaxLength, maxLength, maxLengthMessage));
+        }
+
+        return new FormModel(
+            symbol.ContainingNamespace?.ToDisplayString() ?? "",
+            symbol.Name, isPartial, props.ToImmutable(), diagnostics.ToImmutable());
+    }
+
+    private static string? GetString(AttributeData attr, string name)
+        => attr.NamedArguments.FirstOrDefault(a => a.Key == name).Value.Value as string;
+
+    private static (FormPropKind, bool IsNullable) ClassifyFormProp(ITypeSymbol type)
+    {
+        if (type is INamedTypeSymbol named && named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+            && named.TypeArguments.Length == 1)
+        {
+            var (kind, _) = ClassifyFormProp(named.TypeArguments[0]);
+            return (kind, true);
+        }
+        return type.SpecialType switch
+        {
+            SpecialType.System_String => (FormPropKind.String, false),
+            SpecialType.System_Int32 => (FormPropKind.Int32, false),
+            SpecialType.System_Int64 => (FormPropKind.Int64, false),
+            SpecialType.System_Boolean => (FormPropKind.Boolean, false),
+            SpecialType.System_Double => (FormPropKind.Double, false),
+            SpecialType.System_Decimal => (FormPropKind.Decimal, false),
+            _ => (FormPropKind.Unsupported, false),
+        };
+    }
+
+    private static void EmitForms(SourceProductionContext spc, ImmutableArray<FormModel> forms)
+    {
+        foreach (var form in forms)
+        {
+            if (form.Diagnostics.Length > 0)
+            {
+                foreach (var d in form.Diagnostics)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        new DiagnosticDescriptor("VOLT030", "Volt form", "{0}", "Volt", DiagnosticSeverity.Error, true),
+                        Location.None, d));
+                }
+                continue;
+            }
+            spc.AddSource($"VoltForms_{form.ClassName}.g.cs", SourceText.From(EmitFormCode(form), Encoding.UTF8));
+        }
+    }
+
+    private static string EmitFormCode(FormModel form)
+    {
+        var sb = new StringBuilder(2048);
+        sb.AppendLine("// <auto-generated> Volt form binder — do not edit");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using Volt;");
+        sb.AppendLine();
+        sb.AppendLine($"namespace {(form.Namespace.Length > 0 ? form.Namespace : "global")}");
+        sb.AppendLine("{");
+        sb.AppendLine($"    partial class {form.ClassName} : IVoltForm");
+        sb.AppendLine("    {");
+        sb.AppendLine("        static IVoltForm? IVoltForm.VoltBind(IReadOnlyList<(string Name, string Value)> fields, out List<VoltFormError>? errors)");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            var form = new {form.ClassName}();");
+        sb.AppendLine("            List<VoltFormError>? list = null;");
+        foreach (var prop in form.Properties)
+            sb.AppendLine($"            bool p_{prop.Name}_present = false;");
+        sb.AppendLine("            for (int i = 0; i < fields.Count; i++)");
+        sb.AppendLine("            {");
+        sb.AppendLine("                var (name, value) = fields[i];");
+        if (form.Properties.Length == 0)
+        {
+            sb.AppendLine("                _ = name; _ = value;");
+        }
+        else
+        {
+            sb.AppendLine("                switch (name.ToLowerInvariant())");
+            sb.AppendLine("                {");
+            foreach (var prop in form.Properties)
+            {
+                sb.AppendLine($"                    case {SymbolDisplay.FormatLiteral(prop.LowerName, quote: true)}:");
+                sb.AppendLine("                    {");
+                if (prop.Kind == FormPropKind.String)
+                {
+                    sb.AppendLine($"                        form.{prop.Name} = value ?? \"\";");
+                }
+                else if (prop.Kind == FormPropKind.Boolean)
+                {
+                    // HTML checkboxes post "on"; accept true/false/1/0 too
+                    sb.AppendLine($"                        form.{prop.Name} = value is \"on\" or \"true\" or \"1\" or \"yes\";");
+                }
+                else
+                {
+                    var parse = prop.Kind switch
+                    {
+                        FormPropKind.Int32 => "int.TryParse(value, out var parsed)",
+                        FormPropKind.Int64 => "long.TryParse(value, out var parsed)",
+                        FormPropKind.Double => "double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var parsed)",
+                        FormPropKind.Decimal => "decimal.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var parsed)",
+                        _ => "false",
+                    };
+                    sb.AppendLine($"                        if ({parse})");
+                    sb.AppendLine($"                            form.{prop.Name} = parsed;");
+                    sb.AppendLine("                        else");
+                    sb.AppendLine("                        {");
+                    sb.AppendLine("                            list ??= new List<VoltFormError>();");
+                    if (prop.IsNullable)
+                        sb.AppendLine($"                            form.{prop.Name} = null;"); // absent/malformed nullable → null, no error
+                    else
+                        sb.AppendLine($"                            list.Add(new VoltFormError(\"{prop.Name}\", \"must be a number\"));");
+                    sb.AppendLine("                        }");
+                }
+                sb.AppendLine($"                        p_{prop.Name}_present = true;");
+                sb.AppendLine("                        break;");
+                sb.AppendLine("                    }");
+            }
+            sb.AppendLine("                }");
+        }
+        sb.AppendLine("            }");
+        // ---- validation ----
+        foreach (var prop in form.Properties)
+        {
+            if (prop.Required)
+            {
+                if (prop.Kind == FormPropKind.String)
+                    sb.AppendLine($"            if (string.IsNullOrWhiteSpace(form.{prop.Name})) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(prop.RequiredMessage, quote: true)});");
+                else if (prop.IsNullable)
+                    sb.AppendLine($"            if (form.{prop.Name} is null) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(prop.RequiredMessage, quote: true)});");
+                else
+                    sb.AppendLine($"            if (!p_{prop.Name}_present) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(prop.RequiredMessage, quote: true)});");
+            }
+            if (prop.Email && prop.Kind == FormPropKind.String)
+            {
+                sb.AppendLine($"            if (!string.IsNullOrEmpty(form.{prop.Name}) && (form.{prop.Name}.IndexOf('@') <= 0 || form.{prop.Name}.LastIndexOf('.') < form.{prop.Name}.IndexOf('@'))) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(prop.EmailMessage, quote: true)});");
+            }
+            if (prop.HasRange && prop.Kind is FormPropKind.Int32 or FormPropKind.Int64 or FormPropKind.Double or FormPropKind.Decimal)
+            {
+                var message = prop.RangeMessage ?? $"must be between {prop.RangeMin} and {prop.RangeMax}";
+                var literalSuffix = prop.Kind is FormPropKind.Double ? "d" : prop.Kind is FormPropKind.Decimal ? "m" : "L";
+                if (prop.IsNullable)
+                    sb.AppendLine($"            if (form.{prop.Name} is {{ }} v_{prop.Name} && (v_{prop.Name} < {prop.RangeMin}{literalSuffix} || v_{prop.Name} > {prop.RangeMax}{literalSuffix})) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(message, quote: true)});");
+                else
+                    sb.AppendLine($"            if (form.{prop.Name} < {prop.RangeMin}{literalSuffix} || form.{prop.Name} > {prop.RangeMax}{literalSuffix}) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(message, quote: true)});");
+            }
+            if (prop.HasMaxLength && prop.Kind == FormPropKind.String)
+            {
+                sb.AppendLine($"            if (form.{prop.Name} is not null && form.{prop.Name}.Length > {prop.MaxLength}) AddError(ref list, \"{prop.Name}\", {SymbolDisplay.FormatLiteral(prop.MaxLengthMessage, quote: true)});");
+            }
+        }
+        sb.AppendLine("            errors = list;");
+        sb.AppendLine("            return form;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        private static void AddError(ref List<VoltFormError>? errors, string field, string message)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            errors ??= new List<VoltFormError>();");
+        sb.AppendLine("            errors.Add(new VoltFormError(field, message));");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
     private static void RegisterVoltFilePipeline(IncrementalGeneratorInitializationContext context)
     {
         // raw texts: parsing happens in the emit step — .volt files need cross-file

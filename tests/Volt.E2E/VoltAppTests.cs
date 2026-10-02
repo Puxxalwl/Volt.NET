@@ -102,6 +102,85 @@ public sealed class VoltAppTests : IAsyncLifetime
         Assert.DoesNotContain("partials", sitemap);
     }
 
+    // ---- M6: typed forms — bind + validate without JavaScript ----------------------
+
+    private static FormUrlEncodedContent Form(params (string, string)[] fields)
+        => new(fields.Select(f => new KeyValuePair<string, string>(f.Item1, f.Item2)));
+
+    [Fact]
+    public async Task Form_InvalidEmail_ShowsErrorsWithoutJs()
+    {
+        using var res = await _client.PostAsync("/subscribe", Form(("email", "not-an-email"), ("name", "Ann")));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("field-error", html);
+        Assert.Contains("data-field=\"Email\"", html);
+        Assert.Contains("must be an email address", html);
+        Assert.DoesNotContain("class=\"saved\"", html);
+        // the submitted value survives re-render
+        Assert.Contains("value=\"not-an-email\"", html);
+        Assert.Contains("value=\"Ann\"", html);
+    }
+
+    [Fact]
+    public async Task Form_MissingRequiredField_ReportsRequired()
+    {
+        using var res = await _client.PostAsync("/subscribe", Form(("name", "x")));
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("data-field=\"Email\"", html);
+        Assert.Contains("email is required", html);
+    }
+
+    [Fact]
+    public async Task Form_OutOfRange_ShowsRangeError()
+    {
+        using var res = await _client.PostAsync("/subscribe", Form(("email", "a@b.io"), ("rating", "9")));
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("data-field=\"Rating\"", html);
+        Assert.Contains("must be between 1 and 5", html);
+    }
+
+    [Fact]
+    public async Task Form_TooLongName_ShowsMaxLengthError()
+    {
+        using var res = await _client.PostAsync("/subscribe",
+            Form(("email", "a@b.io"), ("name", new string('x', 21))));
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("data-field=\"Name\"", html);
+        Assert.Contains("too long", html);
+    }
+
+    [Fact]
+    public async Task Form_ValidSubmission_RendersSuccess_AndCheckboxParsesOn()
+    {
+        using var res = await _client.PostAsync("/subscribe",
+            Form(("email", "hi@volt.dev"), ("rating", "4"), ("subscribe", "on"), ("name", "Ann")));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var html = await res.Content.ReadAsStringAsync();
+        Assert.Contains("class=\"saved\"", html);
+        Assert.Contains("saved:hi@volt.dev", html);
+        Assert.DoesNotContain("field-error", html);
+        // checkbox "on" → true → re-render keeps checked
+        Assert.Contains("checked=\"checked\"", html);
+    }
+
+    [Fact]
+    public async Task Form_PostRedirectGet_Returns303WithLocation()
+    {
+        var handler = new HttpClientHandler { AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = _client.BaseAddress };
+        using var res = await client.PostAsync("/login", Form(("user", "x")));
+        Assert.Equal(HttpStatusCode.SeeOther, res.StatusCode);
+        Assert.Equal("/about", res.Headers.Location?.ToString());
+    }
+
+    [Fact]
+    public async Task Form_PostToUnknownRoute_Is404()
+    {
+        using var res = await _client.PostAsync("/definitely-missing", Form(("a", "b")));
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+    }
+
     [Fact]
     public async Task UnknownRouteReturns404Page()
     {
@@ -287,9 +366,18 @@ public sealed class VoltAppTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PostMethodOnPageRouteReturns405()
+    public async Task PostMethodOnPageRoute_RendersPage_M6()
     {
+        // M6: POST reaches the page's OnPostAsync (form flow); a page without
+        // a handler falls back to rendering — the old behavior was a bare 405
         var response = await _client.PostAsync("/", new StringContent(""));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PutMethodIsStill405()
+    {
+        var response = await _client.PutAsync("/", new StringContent(""));
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
     }
 
