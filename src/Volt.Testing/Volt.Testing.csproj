@@ -7,6 +7,8 @@
     <PackageId>Volt.Testing</PackageId>
     <IsPublishable>true</IsPublishable>
     <Description>Volt.NET testing utilities: in-process test server (no sockets) + HTML golden-file snapshot assertions for pages.</Description>
+    <!-- a LIBRARY referencing xunit — never a test project itself (dotnet test must skip it) -->
+    <IsTestProject>false</IsTestProject>
     <RootNamespace>Volt.Testing</RootNamespace>
   </PropertyGroup>
 
