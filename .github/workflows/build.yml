@@ -45,7 +45,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
             encoded=$(grep -E "FAIL|Не пройден" test-output.log | grep -v "Failed!" | head -12 | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g')
-            echo "::error::failing tests:%0A$encoded"
+            tail_enc=$(tail -c 2500 test-output.log | sed -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g')
+            echo "::error::failing tests:%0A$encoded%0A--- tail of output ---%0A$tail_enc"
             exit "$status"
           fi
         env:
