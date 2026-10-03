@@ -192,6 +192,11 @@ jobs:
         run: touch dist/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
+          # unique per attempt: a re-run would otherwise create a second artifact
+          # with the default name and deploy-pages fails on "multiple artifacts"
+          name: github-pages-${{ github.run_attempt }}
           path: dist
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
