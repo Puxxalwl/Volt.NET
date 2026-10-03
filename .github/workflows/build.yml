@@ -34,14 +34,20 @@ jobs:
       - name: Test (unit + compiler + E2E on both transports)
         run: |
           set -o pipefail
-          dotnet test Volt.slnx -c Release --no-build 2>&1 | tee test-output.log
-          # surface failing tests in the step summary (job logs need admin rights)
+          status=0
+          dotnet test Volt.slnx -c Release --no-build 2>&1 | tee test-output.log || status=$?
+          # surface failing tests as annotations + summary (job logs need admin rights)
           {
             echo "### Test failures"
             echo '```'
-            grep -E "Не пройден|Failed .*\[FAIL\]|error CS" test-output.log | head -30 || echo "(none)"
+            grep -E "Не пройден |Failed .*\[FAIL\]|error CS" test-output.log | head -30 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            encoded=$(grep -E "Не пройден |Failed .*\[FAIL\]" test-output.log | head -12 | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g')
+            echo "::error::failing tests:%0A$encoded"
+            exit "$status"
+          fi
         env:
           DOTNET_ROLL_FORWARD: Major
 
