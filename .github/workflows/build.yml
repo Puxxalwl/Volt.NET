@@ -40,11 +40,11 @@ jobs:
           {
             echo "### Test failures"
             echo '```'
-            grep -E "Не пройден |Failed .*\[FAIL\]|error CS" test-output.log | head -30 || true
+            grep -E "FAIL|Не пройден|error CS" test-output.log | head -30 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
-            encoded=$(grep -E "Не пройден |Failed .*\[FAIL\]" test-output.log | head -12 | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g')
+            encoded=$(grep -E "FAIL|Не пройден" test-output.log | grep -v "Failed!" | head -12 | sed -e ':a' -e 'N' -e '$!ba' -e 's/%/%25/g' -e 's/\r//g' -e 's/\n/%0A/g')
             echo "::error::failing tests:%0A$encoded"
             exit "$status"
           fi
