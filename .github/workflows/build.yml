@@ -32,7 +32,16 @@ jobs:
           DOTNET_ROLL_FORWARD: Major
 
       - name: Test (unit + compiler + E2E on both transports)
-        run: dotnet test Volt.slnx -c Release --no-build
+        run: |
+          set -o pipefail
+          dotnet test Volt.slnx -c Release --no-build 2>&1 | tee test-output.log
+          # surface failing tests in the step summary (job logs need admin rights)
+          {
+            echo "### Test failures"
+            echo '```'
+            grep -E "Не пройден|Failed .*\[FAIL\]|error CS" test-output.log | head -30 || echo "(none)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
           DOTNET_ROLL_FORWARD: Major
 
