@@ -149,6 +149,12 @@ internal static class VoltFileParser
             {
                 model.Namespace = line.Substring("@namespace ".Length).Trim();
             }
+            else if (line.StartsWith("@class ", StringComparison.Ordinal))
+            {
+                // M6: explicit class name — pairs a .volt page with a code-behind partial class
+                var className = line.Substring("@class ".Length).Trim();
+                if (className.Length > 0) model.ClassName = className;
+            }
             else if (line.StartsWith("@layout ", StringComparison.Ordinal))
             {
                 model.LayoutOverride = line.Substring("@layout ".Length).Trim().Trim('"', '\'');

@@ -15,6 +15,8 @@ public sealed class Index : VoltPage
         {
             using (w.Li()) { using (w.A()) { w.Href("/routing"); w.Text("Routing"); } }
             using (w.Li()) { using (w.A()) { w.Href("/islands"); w.Text("Islands & hydration"); } }
+            using (w.Li()) { using (w.A()) { w.Href("/templated"); w.Text("Templates (.volt)"); } }
+            using (w.Li()) { using (w.A()) { w.Href("/whats-new"); w.Text("M6: forms, testing, metrics, minify"); } }
         }
     });
 }

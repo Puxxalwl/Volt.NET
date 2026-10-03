@@ -381,6 +381,10 @@ public static class VoltEngine
     private static (int Capacity, string? Directory)? _ssgIdentity; // struct compare: no allocation
     private static readonly object SsgCacheLock = new();
 
+    // M6: caches by (capacity, directory) — several option sets can coexist in one
+    // process (e.g. parallel test servers); swapping a single static lost entries.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(int Capacity, string? Directory), SsgCache> SsgCaches = new();
+
     /// <summary>M6: the currently-shared SSG cache (for VoltRuntime.RevalidateTag).</summary>
     internal static SsgCache? GetSharedSsgCache() => _ssgCache;
 
@@ -391,19 +395,16 @@ public static class VoltEngine
         var cache = _ssgCache;
         if (cache is null || _ssgIdentity != identity)
         {
-            lock (SsgCacheLock)
+            cache = SsgCaches.GetOrAdd(identity, key =>
             {
-                if (_ssgCache is null || _ssgIdentity != identity)
-                {
-                    var backend = options.SsgCacheDirectory is { Length: > 0 } dir
-                        ? new FileSsgCacheBackend(dir)
-                        : null;
-                    _ssgCache = new SsgCache(options.SsgCacheCapacity, backend,
-                        options.SsgCacheCapacity + "|" + options.SsgCacheDirectory);
-                    _ssgIdentity = identity;
-                }
-                cache = _ssgCache;
-            }
+                var backend = key.Directory is { Length: > 0 } dir
+                    ? new FileSsgCacheBackend(dir)
+                    : null;
+                return new SsgCache(key.Capacity, backend,
+                    key.Capacity + "|" + key.Directory);
+            });
+            _ssgCache = cache; // fast path serves from the most recent one
+            _ssgIdentity = identity;
         }
         return cache;
     }

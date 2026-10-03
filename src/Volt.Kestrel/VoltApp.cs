@@ -22,7 +22,8 @@ public static class VoltApp
 
         if (Environment.GetEnvironmentVariable("VOLT_RUN_MODE") == "export")
         {
-            VoltExporter.Export(options, options.ExportPath);
+            var outDir = Environment.GetEnvironmentVariable("VOLT_EXPORT_DIR") ?? options.ExportPath;
+            VoltExporter.Export(options, outDir);
             return 0;
         }
 

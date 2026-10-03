@@ -145,14 +145,63 @@ the same `VoltPage` render code (no runtime interpretation):
 </html>
 ```
 
-Directives: `@page`, `@mode`, `@revalidate`, `@namespace`. In markup: `@expr` / `@(expr)`
-interpolate, `@{ … }` runs raw C#, `@@` is a literal `@`. Code blocks switch back to markup
-when a line starts with a tag. `notfound.volt` / `error.volt` are special pages.
+Directives: `@page`, `@mode`, `@revalidate`, `@namespace`, `@tag`, `@class`, `@layout`,
+`@partial`. In markup: `@expr` / `@(expr)` interpolate, `@{ … }` runs raw C#, `@@` is a
+literal `@`. Code blocks switch back to markup when a line starts with a tag.
+`notfound.volt` / `error.volt` are special pages.
+
+**Layouts (M6)** — `Pages/_Layout.volt` wraps every page in its tree; `@renderbody` marks
+the slot. Nested layouts compose at compile time (a named layout nests into the nearest
+default `_Layout.volt`), `@layout none` opts out. The splice is done by the generator —
+**zero runtime cost**.
+
+**Partials (M6)** — `@partial Feature(string title, string body)` in a `.volt` file makes
+it a typed component; call it from any page: `@Feature("Fast", "3µs per cached page")`.
+Partials compile into a static class — no runtime lookup, no reflection.
+
+**Code-behind (M6)** — .volt pages emit `partial` classes: `@class Subscribe` pairs
+`Pages/subscribe.volt` with your own `partial class Subscribe` (fields, `OnPostAsync`, …).
 Islands embed directly: `<volt-island name="Counter" state='{"count":0}' />`
 (a `[VoltIsland(Wasm = "…")]` component adds `data-v-wasm` and dispatches client-side —
 [the module contract](CONTRACT.md); `volt wasm validate module.wasm` checks a module
 against it).
 This site's [templates page](apps/docs/Pages/Templates.volt) is written in .volt.
+
+## M6: the DX feature set
+
+Everything that makes a framework pleasant to use day-to-day — and none of it exists
+out-of-the-box in Blazor/Razor Pages/Next.js in this combination:
+
+- **Layouts & partials** — compile-time spliced, zero runtime cost (above).
+- **Middleware** — `options.Use(async (ctx, next) => …)` onion around the whole
+  pipeline: headers, auth, redirects, short-circuits. `options.OnException` for
+  custom 500s.
+- **Typed forms, no JavaScript** — `[VoltForm]` on a partial class generates a
+  reflection-free binder: `OnPostAsync` + `request.TryForm<T>(out form, out errors)`
+  with `[VoltRequired]`, `[VoltEmail]`, `[VoltRange]`, `[VoltMaxLength]` validation.
+  Errors re-render server-side; a successful flow can `VoltPostResult.Redirect`
+  (PRG). Works with JavaScript disabled — islands' no-JS fallback philosophy,
+  applied to forms.
+- **Volt.Testing** — `VoltTestServer.Create()` runs the engine in-process (no
+  sockets, no Kestrel): `GetAsync` / `PostAsync` + `AssertMatchesSnapshot()` HTML
+  golden files (`__snapshots__/`, `VOLT_UPDATE_SNAPSHOTS=1` to (re)create).
+  Framework-level page testing, like snapshot tests in the JS world.
+- **Live reload** — `volt dev` watches Pages/ and wwwroot/; DevMode pages carry a
+  ~180-byte poll script that reloads the tab when templates change or the app
+  rebuilds. DevMode also bypasses the SSG cache (always-fresh renders).
+- **HTML minification** — `<VoltMinify>true</VoltMinify>`: .volt static text is
+  collapsed at compile time; rendered output at runtime. Safe rules only
+  (pre/script/style/textarea and attribute values are never touched). A byte-level
+  streaming minifier, in-place, allocation-free.
+- **Metrics & HUD** — `EnableMetrics` → `/_volt/metrics` in Prometheus text format
+  (requests, fast-path, SSG hits, status classes, µs histogram) and `/volt/hud` —
+  a live auto-refreshing page. Lock-free striped counters, branch-gated when off.
+- **On-demand revalidation** — `@tag products` on a page; later
+  `VoltRuntime.RevalidateTag("products")`, `POST /_volt/revalidate` (token-guarded)
+  or `volt revalidate --tag products --token S` evicts those cached entries; the
+  next request re-renders.
+- **Demo site** — [apps/demo](apps/demo) exports to a static site
+  (`volt export`) and CI deploys it to GitHub Pages.
 
 ## Transports (M2)
 
@@ -235,8 +284,9 @@ Why Volt is lean by construction:
 ## CLI
 
 ```
-volt new <path>             scaffold an app
-volt dev [path] [--port N]  dev server (dotnet watch hot reload)
+volt new <path> [--template blog]  scaffold an app (blog: .volt layouts + typed forms + minify)
+volt dev [path] [--port N]  dev server (dotnet watch hot reload, browser live-reload)
+volt revalidate --url U --tag T --token S  evict cached pages by tag
 volt build [path] [--rid R] Native AOT publish (default rid linux-x64, --no-aot to skip)
 volt export [path] [--out DIR] [--base-url U]  static export to dist/
 volt serve [path] [--port N] run without watch
@@ -315,5 +365,12 @@ static assets embedded in the binary (single-file/AOT works without wwwroot on d
 
 M4: shared/distributed SSG cache (file backend + cross-instance serving proven by
 tests), immutable content-hashed hydrate asset, `volt wasm validate` + Node
-conformance of the WASM protocol — **done**. Planned M5: C# → wasm island build
-mode, pluggable dist pipeline, cache revalidation across instances.
+conformance of the WASM protocol — **done**.
+
+M5: NuGet packages (7) + trusted publishing from CI tags — **done**.
+
+M6: developer experience — layouts/partials, middleware, typed forms without
+JavaScript, Volt.Testing with golden files, live reload, compile-time +
+runtime HTML minification, Prometheus metrics + HUD, on-demand revalidation
+tags, `volt new --template blog`, demo site on GitHub Pages — **done**.
+Planned M7: auth/sessions, i18n, streaming SSR, runtime template compilation.

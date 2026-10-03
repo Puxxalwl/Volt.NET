@@ -348,4 +348,17 @@ public sealed class VoltTagTests
         var generated = RunGenerator(("/app/Pages/plain.volt", "@page /plain\n@mode SSR\n\n<p>plain</p>"));
         Assert.DoesNotContain("override string[] Tags", generated);
     }
+
+    [Fact]
+    public void ClassDirective_RenamesGeneratedPageClass_ForCodeBehind()
+    {
+        var generated = RunGenerator(("/app/Pages/subscribe.volt",
+            "@namespace App.Pages\n@class Subscribe\n@page /subscribe\n@mode SSR\n\n<p>hi</p>"));
+
+        Assert.Contains("public sealed partial class Subscribe : VoltPage", generated);
+        Assert.DoesNotContain("class Volt_subscribe", generated);
+        // default naming without @class
+        var plain = RunGenerator(("/app/Pages/plain.volt", "@page /plain\n@mode SSR\n\n<p>plain</p>"));
+        Assert.Contains("public sealed partial class Volt_plain : VoltPage", plain);
+    }
 }

@@ -587,7 +587,7 @@ public sealed class VoltGenerator : IIncrementalGenerator
             page.AppendLine();
             page.AppendLine($"namespace {model.Namespace};");
             page.AppendLine();
-            page.AppendLine($"public sealed class {model.ClassName} : VoltPage");
+            page.AppendLine($"public sealed partial class {model.ClassName} : VoltPage"); // partial: code-behind may extend it
             page.AppendLine("{");
             page.AppendLine($"    public override RenderMode Mode => RenderMode.{model.Mode};");
             if (model.Revalidate >= 0)

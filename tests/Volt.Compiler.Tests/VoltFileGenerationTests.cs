@@ -71,7 +71,7 @@ public sealed class VoltFileGenerationTests
         var generated = RunGenerator(("/app/Pages/Hello.volt", HelloVolt));
 
         Assert.Contains("RouteRegistry.Root.Add(\"/hello\"", generated);
-        Assert.Contains("public sealed class Volt_Hello : VoltPage", generated);
+        Assert.Contains("public sealed partial class Volt_Hello : VoltPage", generated);
         Assert.Contains("RenderMode.SSG", generated);
         Assert.Contains("w.DocType();", generated);
         Assert.Contains("using (w.El(\"html\"))", generated);

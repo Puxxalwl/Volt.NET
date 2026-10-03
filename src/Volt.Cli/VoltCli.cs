@@ -87,6 +87,7 @@ public static class VoltCli
 
             Usage:
               volt new <path>                 scaffold a new app
+              volt new [path] [--template blog]   scaffold an app (.volt layouts/forms by default: --template blog)
               volt dev [path] [--port N]      dev server with hot reload (dotnet watch)
               volt revalidate --url --tag --token   evict cached pages by tag
               volt build [path] [--rid R]     native AOT publish (default rid: linux-x64)
@@ -118,14 +119,22 @@ public static class VoltCli
         }
         Directory.CreateDirectory(target);
 
+        var template = FlagValue(args, "--template");
+        if (template is not null && template != "starter" && template != "blog")
+        {
+            Console.Error.WriteLine($"volt new: unknown template '{template}' (available: starter, blog)");
+            return 1;
+        }
+
         var appName = SanitizeName(Path.GetFileName(target));
-        foreach (var (rel, content) in AppTemplate.Files(appName))
+        var files = template == "blog" ? BlogTemplate.Files(appName) : AppTemplate.Files(appName);
+        foreach (var (rel, content) in files)
         {
             var file = Path.Combine(target, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             File.WriteAllText(file, content.Replace("Starter", appName, StringComparison.Ordinal));
         }
-        Console.WriteLine($"volt new: app created at {target}");
+        Console.WriteLine($"volt new: {(template ?? "starter")} app created at {target}");
         Console.WriteLine("  cd " + args[0]);
         Console.WriteLine("  volt dev");
         return 0;
