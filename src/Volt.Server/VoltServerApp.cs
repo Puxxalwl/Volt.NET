@@ -22,7 +22,8 @@ public static class VoltServerApp
         if (Environment.GetEnvironmentVariable("VOLT_RUN_MODE") == "export")
         {
             var outDir = Environment.GetEnvironmentVariable("VOLT_EXPORT_DIR") ?? options.ExportPath;
-            return VoltExporter.Export(options, outDir);
+            VoltExporter.Export(options, outDir); // page count goes to the log, not the exit code
+            return 0;
         }
 
         var port = ResolvePort(args, options);

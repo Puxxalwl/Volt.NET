@@ -23,7 +23,7 @@ public static class VoltApp
         if (Environment.GetEnvironmentVariable("VOLT_RUN_MODE") == "export")
         {
             var outDir = Environment.GetEnvironmentVariable("VOLT_EXPORT_DIR") ?? options.ExportPath;
-            VoltExporter.Export(options, outDir);
+            VoltExporter.Export(options, outDir); // page count goes to the log, not the exit code
             return 0;
         }
 
