@@ -201,7 +201,8 @@ out-of-the-box in Blazor/Razor Pages/Next.js in this combination:
   or `volt revalidate --tag products --token S` evicts those cached entries; the
   next request re-renders.
 - **Demo site** — [apps/demo](apps/demo) exports to a static site
-  (`volt export`) and CI deploys it to GitHub Pages.
+  (`volt export`) and CI deploys it to GitHub Pages:
+  **[puxxalwl.github.io/Volt.NET](https://puxxalwl.github.io/Volt.NET/)**.
 
 ## Transports (M2)
 

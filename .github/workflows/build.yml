@@ -185,7 +185,8 @@ jobs:
       - name: Export static site
         run: |
           cd apps/demo
-          VOLT_RUN_MODE=export VOLT_EXPORT_DIR="$GITHUB_WORKSPACE/dist" DOTNET_ROLL_FORWARD=Major dotnet run -c Release
+          VOLT_RUN_MODE=export VOLT_EXPORT_DIR="$GITHUB_WORKSPACE/dist" \
+            VOLT_BASE_URL=https://puxxalwl.github.io/Volt.NET DOTNET_ROLL_FORWARD=Major dotnet run -c Release
           echo "--- exported files ---"
           find ../../dist -type f | sort
       - name: Ensure .nojekyll (underscore dirs like _volt/ must be served as-is)
