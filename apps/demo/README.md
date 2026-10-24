@@ -63,6 +63,14 @@ compilation. No JavaScript reimplementation of the Counter is used here.
 - This showcase has only root and one-segment SSG routes. `Site.Root` is explicitly
   scoped to that tree, rather than presented as a general base-path solution.
 
+## Browser integration checks
+
+The optional `scripts/check-demo-browser.cjs` checks all four pages at 390, 768
+and 1440 px, disabled static controls, a real hydrated action, real form
+validation and the no-JavaScript fallback. Start the exported site on port 4173
+and the Volt app on port 5093. Install Playwright into a temporary directory;
+it is not an application dependency. See the script header for the command.
+
 ## Design and evidence
 
 Graphite surfaces, amber wayfinding, system typography and code/result pairs.
