@@ -6,7 +6,13 @@ using Xunit;
 
 namespace Volt.E2E;
 
+// RevalidateTag operates on the process-global hot cache. Other server fixtures
+// switch that cache, so this collection must not overlap their requests.
+[CollectionDefinition("Global runtime revalidation", DisableParallelization = true)]
+public sealed class GlobalRuntimeRevalidationCollection;
+
 /// <summary>M6: on-demand revalidation — @tag + POST /_volt/revalidate + VoltRuntime.RevalidateTag.</summary>
+[Collection("Global runtime revalidation")]
 public sealed class RevalidateE2ETests : IAsyncLifetime
 {
     private string _url = null!;
