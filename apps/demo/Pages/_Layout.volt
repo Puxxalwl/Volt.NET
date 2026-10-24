@@ -3,24 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Volt.NET — fullstack C# without JavaScript bloat</title>
-  <meta name="description" content="Volt.NET demo: SSG, SSR, islands, typed forms, layouts — a fullstack C# framework with zero-allocation output." />
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Volt.NET — C# web framework / Technical showcase</title>
+  <meta name="description" content="Explore Volt.NET through real code: compiled .volt templates, static export, server-rendered islands and typed forms." />
+  <link rel="stylesheet" href="@(Volt.Demo.Site.Root(ctx))styles.css" />
+  <link rel="icon" href="@(Volt.Demo.Site.Root(ctx))favicon.svg" type="image/svg+xml" />
 </head>
 <body>
-  <header>
-    <nav>
-      <a class="brand" href="/">⚡ Volt.NET</a>
-      <a href="/features">Features</a>
-      <a href="/islands">Islands</a>
-      <a href="/about">About</a>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="shell nav" aria-label="Main navigation">
+      <a class="brand" href="@(Volt.Demo.Site.Root(ctx))"><span class="bolt" aria-hidden="true">ϟ</span> Volt.NET</a>
+      <div class="nav-links"><a href="@(Volt.Demo.Site.Root(ctx))#playground">Demos</a><a href="@(Volt.Demo.Site.Root(ctx))#architecture">How it works</a><a href="@(Volt.Demo.Site.Root(ctx))#resources">Resources</a></div>
+      <a class="github-link" href="https://github.com/Puxxalwl/Volt.NET">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
-  <main>
+  <main class="shell" id="main">
     @renderbody
   </main>
-  <footer>
-    <p>Built with Volt.NET · C# only · <a href="https://github.com/Puxxalwl/Volt.NET">source on GitHub</a></p>
-  </footer>
+  <footer class="site-footer shell"><a class="brand" href="@(Volt.Demo.Site.Root(ctx))"><span class="bolt" aria-hidden="true">ϟ</span> Volt.NET</a><p>Compiled with Volt. Served as HTML.</p><a href="https://github.com/Puxxalwl/Volt.NET/blob/main/LICENSE">Open source / MIT ↗</a></footer>
 </body>
 </html>

@@ -2,14 +2,26 @@
 @mode SSG
 @tag home
 
-<h1>Features</h1>
-<section>
-  @Feature("Folder routing", "Files under Pages/ become routes — /Pages/blog/post.volt is served at /blog/post. No registration code.")
-  @Feature("Layouts & partials", "_Layout.volt wraps every page in its tree; @partial turns markup into a reusable C#-typed component.")
-  @Feature("Built-in SEO", "sitemap.xml and robots.txt are generated from the route table at runtime — no extra packages.")
-  @Feature("Live reload", "volt dev rerenders templates on save; the browser reloads itself — one fetch per second, no websockets.")
-  @Feature("HTML minification", "VoltMinify collapses whitespace at compile time (in the generator) and after render — safe rules only.")
-  @Feature("Metrics & HUD", "Prometheus-text counters and microsecond histograms at /_volt/metrics; a live page at /_volt/hud.")
-  @Feature("On-demand revalidation", "Tag pages with @tag, evict them by tag over HTTP — the next request re-renders fresh.")
-  @Feature("Testing utilities", "VoltTestServer drives the engine in-process (no sockets) with HTML golden-file snapshots.")
-</section>
+<div class="page-intro"><a class="breadcrumb" href="../">← OVERVIEW</a><p class="eyebrow">VOLT.NET / RENDERING LAB</p><h1>From template<br />to document.</h1><p class="lead">Follow the source through static rendering, typed forms and route generation. These are framework examples, not browser-side approximations.</p></div>
+<nav class="subnav" aria-label="Demo sections"><a href="#static">01 Static rendering</a><a href="#forms">02 Typed forms</a><a href="#routing">03 Routing</a></nav>
+<section class="demo-section" id="static"><p class="eyebrow">01 / STATIC RENDERING</p><h2>HTML before the request.</h2><p>An SSG page is rendered during export. The output is an ordinary HTML document: the loop below has already run in C#, before your browser receives it.</p>
+<div class="demo-grid"><div class="specimen"><div class="panel-label"><span>SOURCE</span><span>StaticList partial</span></div><pre><code>@("@partial StaticList(string title)\n\n<h3>@title</h3>\n<ul>\n@for (int i = 1; i <= 3; i++) {\n  <li>Release @(i)</li>\n}\n</ul>")</code></pre><div class="panel-label"><span>PAGE</span><span>Pages/Features.volt</span></div><pre><code>@("@page /features\n@mode SSG\n\n@StaticList(\"Release notes\")")</code></pre></div><div class="specimen"><div class="panel-label"><span>ACTUAL OUTPUT</span><span>Rendered by this partial</span></div><div class="preview">@StaticList("Release notes")</div><div class="panel-label"><span>EXPORTED FILES</span><span>Relevant output</span></div><pre class="tree">dist/
+├── index.html
+├── features/index.html
+├── islands/index.html
+├── about/index.html
+├── styles.css
+├── favicon.svg
+├── sitemap.xml
+└── robots.txt</pre></div></div>
+<details><summary>Run the same static export locally</summary><pre><code>@("cd apps/demo\nVOLT_RUN_MODE=export \\\nVOLT_EXPORT_DIR=\"$PWD/../../dist\" \\\nDOTNET_ROLL_FORWARD=Major dotnet run -c Release")</code></pre></details><p class="small">The exporter renders SSG routes, writes route/index.html and copies wwwroot. Parameterized SSG pages must provide StaticPaths(). SSR pages are not exported.</p></section>
+<section class="demo-section" id="forms"><p class="eyebrow">02 / TYPED FORMS</p><h2>A POST becomes a C# object.</h2><p>Mark a partial class with VoltForm. The generator emits a binder and validation from the Volt attributes. The page calls TryForm in OnPostAsync and renders the result.</p>
+<div class="demo-grid"><div class="specimen"><div class="panel-label"><span>MODEL</span><span>Forms/SignupForm.cs</span></div><pre><code>@("using Volt;\n\n[VoltForm]\npublic partial class SignupForm\n{\n    [VoltRequired, VoltEmail]\n    public string Email { get; set; } = \"\";\n}")</code></pre><div class="panel-label"><span>HANDLER EXCERPT</span><span>Pages/Signup.cs</span></div><pre><code>@("public override Task<VoltPostResult>\n    OnPostAsync(VoltRequest request)\n{\n    Valid = request.TryForm<SignupForm>(\n        out var form, out var errors);\n    Form = form;\n    Errors = errors;\n    return Task.FromResult(VoltPostResult.Render);\n}")</code></pre></div><div><div class="specimen"><div class="panel-label"><span>MARKUP PREVIEW</span><span>Not submitted on Pages</span></div><div class="preview"><h3>Check an email address</h3><p>A minimal example of binding and validation. No subscription is created.</p><div class="form-preview"><label for="email-preview">Email</label><input id="email-preview" type="email" value="@(Volt.Demo.Site.ExampleEmail)" readonly="readonly" /><button type="button" disabled="disabled">Validation requires the local server</button></div></div></div><div class="notice"><strong>No fake success state.</strong> GitHub Pages cannot handle POST requests. The same model and handler are compiled into this demo app. Run it locally and open <code>/signup/</code> to submit the real form.</div><a class="copy-link" href="https://github.com/Puxxalwl/Volt.NET/tree/main/apps/demo">Read the complete example ↗</a></div></div><div class="flow"><span>POST fields</span><span>→ generated binder</span><span>→ validation errors or typed value</span><span>→ rendered response</span></div></section>
+<section class="demo-section" id="routing"><p class="eyebrow">03 / ROUTING & COMPOSITION</p><h2>The file tree is the route map.</h2><p>Without an explicit page directive, .volt routes follow their path under Pages. Bracket segments become route parameters. An explicit page directive can override the inferred route.</p><div class="demo-grid"><div class="specimen"><div class="panel-label"><span>FILES</span><span>Example route structure</span></div><pre class="tree">Pages/
+├── _Layout.volt       shared document
+├── index.volt         /
+├── about.volt         /about
+├── blog/
+│   └── [slug].volt    /blog/{slug}
+└── Partials/
+    └── Feature.volt   typed partial</pre></div><div class="specimen"><div class="panel-label"><span>COMPOSITION</span><span>Compile-time, not client-side</span></div><pre><code>@("// Pages/_Layout.volt\n<main>\n    @renderbody\n</main>\n\n// Pages/Partials/Feature.volt\n@partial Feature(string title, string body)\n<div class=\"feature\">\n  <h3>@title</h3>\n  <p>@body</p>\n</div>")</code></pre></div></div><p class="small">The tree is an example, not a list of routes published on this site. Dynamic routes need server-side rendering or enumerated static paths.</p><p><a class="copy-link" href="https://github.com/Puxxalwl/Volt.NET/tree/main/apps/docs/Pages">Explore the template documentation source ↗</a></p></section>

@@ -2,5 +2,9 @@
 
 <div class="card">
   <strong>@label</strong>
-  <volt-island name="Counter" state='{"count":0}' />
+  @if (ctx.Request?.IsExport == true) {
+    Volt.Demo.Site.RenderCounterPreview(w, ctx);
+  } else {
+    <volt-island name="Counter" state='{"count":0}' />
+  }
 </div>

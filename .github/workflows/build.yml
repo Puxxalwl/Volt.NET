@@ -189,6 +189,8 @@ jobs:
             VOLT_BASE_URL=https://puxxalwl.github.io/Volt.NET DOTNET_ROLL_FORWARD=Major dotnet run -c Release
           echo "--- exported files ---"
           find ../../dist -type f | sort
+      - name: Validate showcase links and static hosting boundaries
+        run: python3 scripts/check-demo-export.py dist
       - name: Ensure .nojekyll (underscore dirs like _volt/ must be served as-is)
         run: touch dist/.nojekyll
       - uses: actions/upload-pages-artifact@v3

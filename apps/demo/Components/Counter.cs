@@ -17,6 +17,11 @@ public sealed partial class Counter : VoltComponent<CounterState>
             using (w.Button())
             {
                 w.Type("submit");
+                if (ctx.Request?.IsExport == true)
+                {
+                    w.Attr("disabled", "disabled");
+                    w.Attr("aria-label", "Increment requires the local Volt server");
+                }
                 w.Name("__volt_action");
                 w.Value("increment");
                 w.DataVoltOn("click:increment");
